@@ -31,6 +31,12 @@ interface CarConfig {
   steerLowSpeedFactor: number;
   steerFullSpeed: number;
   yawLowSpeedFactor: number;
+  steerRateLow: number;
+  steerRateHigh: number;
+  frontGripHighSpeedScale: number;
+  rearGripHighSpeedScale: number;
+  highSpeedSteerLimit: number;
+  yawRateLimit: number;
 }
 
 export interface CarTelemetry {
@@ -42,6 +48,16 @@ export interface CarTelemetry {
   driftTime: number;
   progress: number;
   lateralOffset: number;
+  steerAngleDeg: number;
+  yawRateDeg: number;
+  steerInput: number;
+  throttle: number;
+  brake: number;
+  handbrake: number;
+  longitudinalSpeed: number;
+  lateralSpeed: number;
+  frontSlipDeg: number;
+  rearSlipDeg: number;
 }
 
 export interface CarState {
@@ -118,15 +134,22 @@ export function stepCar(
   const steerInput = THREE.MathUtils.clamp(input.steer, -1, 1);
   const steerSpeedFactor = THREE.MathUtils.clamp(speed / config.steerFullSpeed, 0, 1);
   const steerGain = THREE.MathUtils.lerp(config.steerLowSpeedFactor, 1, steerSpeedFactor);
-  const steerAngle = -steerInput * config.maxSteerAngle * steerGain;
-  state.steerAngle = steerAngle;
+  const highSpeedFactor = THREE.MathUtils.smoothstep(speed, config.steerFullSpeed * 0.5, config.steerFullSpeed * 1.6);
+  const steerLimit = THREE.MathUtils.lerp(1, config.highSpeedSteerLimit, highSpeedFactor);
+  const targetSteerAngle = -steerInput * config.maxSteerAngle * steerGain * steerLimit;
+  const steerRate = THREE.MathUtils.lerp(config.steerRateLow, config.steerRateHigh, steerSpeedFactor);
+  const maxSteerDelta = steerRate * dt;
+  const steerError = THREE.MathUtils.clamp(targetSteerAngle - state.steerAngle, -maxSteerDelta, maxSteerDelta);
+  state.steerAngle += steerError;
 
   const effectiveSpeed = Math.max(Math.abs(vLong), 0.6);
   const gripScale = input.handbrake > 0 ? config.handbrakeGripScale : 1;
-  const Cf = config.corneringStiffnessFront * gripScale;
-  const Cr = config.corneringStiffnessRear * gripScale;
+  const frontGripScale = THREE.MathUtils.lerp(1, config.frontGripHighSpeedScale, highSpeedFactor);
+  const rearGripScale = THREE.MathUtils.lerp(1, config.rearGripHighSpeedScale, highSpeedFactor);
+  const Cf = config.corneringStiffnessFront * gripScale * frontGripScale;
+  const Cr = config.corneringStiffnessRear * gripScale * rearGripScale;
 
-  const alphaFront = Math.atan2(vLat + config.cgToFrontAxle * state.yawRate, effectiveSpeed) - steerAngle;
+  const alphaFront = Math.atan2(vLat + config.cgToFrontAxle * state.yawRate, effectiveSpeed) - state.steerAngle;
   const alphaRear = Math.atan2(vLat - config.cgToRearAxle * state.yawRate, effectiveSpeed);
 
   const Fyf = -Cf * Math.tanh(alphaFront / config.slipAngleAtPeak);
@@ -149,13 +172,19 @@ export function stepCar(
   const oldVLong = vLong;
   const oldVLat = vLat;
 
-  vLong += (ax + state.yawRate * oldVLat) * dt;
-  vLat += (ay - state.yawRate * oldVLong) * dt;
+  const crossLong = THREE.MathUtils.clamp(state.yawRate * oldVLat, -18, 18);
+  const crossLat = THREE.MathUtils.clamp(state.yawRate * oldVLong, -18, 18);
+
+  vLong += (ax + crossLong) * dt;
+  vLat += (ay - crossLat) * dt;
 
   const yawAcc = (config.cgToFrontAxle * Fyf - config.cgToRearAxle * Fyr) / config.inertia;
-  const yawResponse = THREE.MathUtils.lerp(config.yawLowSpeedFactor, 1, steerSpeedFactor);
+  const yawResponse =
+    THREE.MathUtils.lerp(config.yawLowSpeedFactor, 1, steerSpeedFactor) *
+    THREE.MathUtils.lerp(1, 0.75, highSpeedFactor);
   state.yawRate += yawAcc * dt * yawResponse;
   state.yawRate *= 1 - Math.min(dt * 0.6, 0.08);
+  state.yawRate = THREE.MathUtils.clamp(state.yawRate, -config.yawRateLimit, config.yawRateLimit);
   state.yaw += state.yawRate * dt;
   state.yaw = normalizeAngle(state.yaw);
 
@@ -169,15 +198,44 @@ export function stepCar(
 
   const updatedProjection = track.projectPoint(state.position);
   state.lastProjection = updatedProjection;
-  const laneOffsetVector = state.position.clone().sub(updatedProjection.projected);
-  const lateral = laneOffsetVector.dot(updatedProjection.sample.binormal);
-  const clampLimit = track.width * 0.5 - 0.9;
-  const clampedLateral = THREE.MathUtils.clamp(lateral, -clampLimit, clampLimit);
-  state.lateralOffset = clampedLateral;
-  state.position
-    .copy(updatedProjection.projected)
-    .addScaledVector(updatedProjection.sample.binormal, clampedLateral)
-    .addScaledVector(updatedProjection.sample.normal, config.rideHeight);
+  const sampleNormal = updatedProjection.sample.normal.clone();
+  const sampleBinormal = updatedProjection.sample.binormal.clone();
+
+  const targetHeightPosition = updatedProjection.projected
+    .clone()
+    .addScaledVector(sampleNormal, config.rideHeight);
+  const normalError = targetHeightPosition.sub(state.position).dot(sampleNormal);
+  state.position.addScaledVector(sampleNormal, normalError);
+
+  const lateralOffset = state.position.clone().sub(updatedProjection.projected).dot(sampleBinormal);
+  const sampleWidth = updatedProjection.sample.width ?? track.width;
+  const clampLimit = Math.max(sampleWidth * 0.5 - 1.2, 0.2);
+  const clampedLateral = THREE.MathUtils.clamp(lateralOffset, -clampLimit, clampLimit);
+  const lateralBlend = THREE.MathUtils.clamp(clampedLateral - lateralOffset, -0.45, 0.45);
+  state.position.addScaledVector(sampleBinormal, lateralBlend);
+  const correctedLateral = state.position.clone().sub(updatedProjection.projected).dot(sampleBinormal);
+  state.lateralOffset = THREE.MathUtils.clamp(correctedLateral, -clampLimit, clampLimit);
+  const finalTarget = updatedProjection.projected
+    .clone()
+    .addScaledVector(sampleNormal, config.rideHeight)
+    .addScaledVector(sampleBinormal, state.lateralOffset);
+  const finalHeightError = finalTarget.sub(state.position).dot(sampleNormal);
+  state.position.addScaledVector(sampleNormal, finalHeightError);
+
+  const approachingRail = Math.abs(state.lateralOffset) > clampLimit - 0.45;
+  if (approachingRail) {
+    const binormal2d = new THREE.Vector2(sampleBinormal.x, sampleBinormal.z);
+    if (binormal2d.lengthSq() > 0) {
+      binormal2d.normalize();
+      const lateralVel = state.velocity.dot(binormal2d);
+      const outwardSign = Math.sign(state.lateralOffset || 1);
+      if (lateralVel * outwardSign > 0) {
+        const correction = -lateralVel * 1.1;
+        state.velocity.addScaledVector(binormal2d, correction);
+      }
+    }
+    state.velocity.multiplyScalar(0.985);
+  }
 
   state.progress = updatedProjection.sample.distance;
   state.gradePercent = updatedProjection.sample.tangent.y * 100;
@@ -215,6 +273,16 @@ export function stepCar(
     driftTime: state.driftTime,
     progress: state.progress,
     lateralOffset: state.lateralOffset,
+    steerAngleDeg: THREE.MathUtils.radToDeg(state.steerAngle),
+    yawRateDeg: THREE.MathUtils.radToDeg(state.yawRate),
+    steerInput,
+    throttle: input.throttle,
+    brake: input.brake,
+    handbrake: input.handbrake,
+    longitudinalSpeed: vLong,
+    lateralSpeed: vLat,
+    frontSlipDeg: THREE.MathUtils.radToDeg(alphaFront),
+    rearSlipDeg: THREE.MathUtils.radToDeg(alphaRear),
   };
 }
 
@@ -252,9 +320,15 @@ function createCarConfig(spec: CarSpec): CarConfig {
     topSpeed: 44 + powerLevel * 5,
     minDriftSpeed: 9,
     driftThresholdDeg: 30,
-    steerLowSpeedFactor: 0.45,
-    steerFullSpeed: 16,
-    yawLowSpeedFactor: 0.24,
+    steerLowSpeedFactor: 0.3,
+    steerFullSpeed: 34,
+    yawLowSpeedFactor: 0.12,
+    steerRateLow: THREE.MathUtils.degToRad(120),
+    steerRateHigh: THREE.MathUtils.degToRad(38),
+    frontGripHighSpeedScale: 0.85,
+    rearGripHighSpeedScale: 0.92,
+    highSpeedSteerLimit: 0.32,
+    yawRateLimit: THREE.MathUtils.degToRad(26),
   };
 }
 

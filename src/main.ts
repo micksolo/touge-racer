@@ -1,7 +1,9 @@
 import './style.css';
 import * as THREE from 'three';
 import { createMountainTrack } from './track';
+import type { TrackSurface } from './track';
 import { InputController } from './input';
+import type { InputSnapshot } from './input';
 import { createCarState, stepCar } from './carPhysics';
 import type { CarSpec, CarState, CarTelemetry } from './carPhysics';
 
@@ -15,7 +17,7 @@ renderer.shadowMap.enabled = true;
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.3;
+renderer.toneMappingExposure = 1.85;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 app.appendChild(renderer.domElement);
 
@@ -34,26 +36,95 @@ const hudDrift = document.querySelector<HTMLSpanElement>('#hud-drift');
 const hudGrade = document.querySelector<HTMLSpanElement>('#hud-grade');
 const hudScore = document.querySelector<HTMLSpanElement>('#hud-score');
 
+const debugPanel = document.createElement('div');
+debugPanel.className = 'debug-panel';
+app.appendChild(debugPanel);
+
+type DebugField = {
+  key: keyof DebugData;
+  label: string;
+  min: number;
+  max: number;
+  formatter?: (value: number) => string;
+};
+
+const formatNumber = (value: number): string => value.toFixed(2);
+
+type DebugData = {
+  steerInput: number;
+  throttle: number;
+  brake: number;
+  handbrake: number;
+  steerAngleDeg: number;
+  yawRateDeg: number;
+  slipAngleDeg: number;
+  frontSlipDeg: number;
+  rearSlipDeg: number;
+  lateralSpeed: number;
+  longitudinalSpeed: number;
+};
+
+const debugFields: DebugField[] = [
+  { key: 'steerInput', label: 'Steer', min: -1, max: 1, formatter: formatNumber },
+  { key: 'throttle', label: 'Throttle', min: 0, max: 1, formatter: formatNumber },
+  { key: 'brake', label: 'Brake', min: 0, max: 1, formatter: formatNumber },
+  { key: 'handbrake', label: 'Handbrake', min: 0, max: 1, formatter: formatNumber },
+  { key: 'steerAngleDeg', label: 'Steer°', min: -45, max: 45, formatter: (v) => `${v.toFixed(1)}` },
+  { key: 'yawRateDeg', label: 'Yaw°/s', min: -180, max: 180, formatter: (v) => `${v.toFixed(1)}` },
+  { key: 'slipAngleDeg', label: 'Slip°', min: -60, max: 60, formatter: (v) => `${v.toFixed(1)}` },
+  { key: 'frontSlipDeg', label: 'Front°', min: -60, max: 60, formatter: (v) => `${v.toFixed(1)}` },
+  { key: 'rearSlipDeg', label: 'Rear°', min: -60, max: 60, formatter: (v) => `${v.toFixed(1)}` },
+  { key: 'lateralSpeed', label: 'Lat m/s', min: -20, max: 20, formatter: (v) => `${v.toFixed(2)}` },
+  { key: 'longitudinalSpeed', label: 'Long m/s', min: -60, max: 60, formatter: (v) => `${v.toFixed(2)}` },
+];
+
+const debugValues = new Map<keyof DebugData, HTMLSpanElement>();
+const debugBars = new Map<keyof DebugData, HTMLDivElement>();
+
+debugFields.forEach((field) => {
+  const row = document.createElement('div');
+  row.className = 'debug-row';
+
+  const label = document.createElement('span');
+  label.className = 'debug-label';
+  label.textContent = field.label;
+  row.appendChild(label);
+
+  const value = document.createElement('span');
+  value.className = 'debug-value';
+  value.textContent = '0';
+  row.appendChild(value);
+  debugValues.set(field.key, value);
+
+  const bar = document.createElement('div');
+  bar.className = 'debug-bar';
+  row.appendChild(bar);
+  debugBars.set(field.key, bar);
+
+  debugPanel.appendChild(row);
+});
+
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a1221);
-scene.fog = new THREE.Fog(0x0a1221, 90, 700);
+scene.background = new THREE.Color(0x1a2740);
+scene.fog = new THREE.Fog(0x1a2740, 140, 820);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
 camera.position.set(60, 52, 75);
 
 const track = createMountainTrack();
 scene.add(track.mesh);
+scene.add(createTrackGlow(track));
 
 scene.add(createGround());
 scene.add(createBackgroundMountains());
 
-const ambient = new THREE.AmbientLight(0x6d7fb6, 0.42);
+const ambient = new THREE.AmbientLight(0xa5bbff, 0.55);
 scene.add(ambient);
 
-const hemi = new THREE.HemisphereLight(0x8da7ff, 0x0d1220, 0.6);
+const hemi = new THREE.HemisphereLight(0xb5cbff, 0x17202f, 0.7);
 scene.add(hemi);
 
-const sun = new THREE.DirectionalLight(0xfff2ce, 1.2);
+const sun = new THREE.DirectionalLight(0xfff2ce, 1.45);
 sun.position.set(-140, 210, 130);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
@@ -64,6 +135,10 @@ sun.shadow.camera.bottom = -420;
 sun.shadow.camera.near = 30;
 sun.shadow.camera.far = 700;
 scene.add(sun);
+
+const rimLight = new THREE.DirectionalLight(0x4cc6ff, 0.6);
+rimLight.position.set(260, 120, -240);
+scene.add(rimLight);
 
 const carSpec: CarSpec = { driftControl: 4, power: 2 };
 const carState = createCarState(track, carSpec);
@@ -79,13 +154,25 @@ const cameraUp = new THREE.Vector3(0, 1, 0);
 const tmpForward = new THREE.Vector3();
 const tmpRight = new THREE.Vector3();
 const tmpTarget = new THREE.Vector3();
+let debugEnabled = false;
+let telemetryLogTimer = 0;
+
+window.addEventListener('keydown', (event) => {
+  if (event.code === 'KeyP') {
+    debugEnabled = !debugEnabled;
+    debugPanel.classList.toggle('visible', debugEnabled);
+  }
+});
 
 function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
-  const telemetry = stepCar(carState, input.getSnapshot(), track, dt);
+  const snapshot = input.getSnapshot();
+  const telemetry = stepCar(carState, snapshot, track, dt);
   updateCarVisual(carVisual, carState, dt);
   updateCamera(camera, carState, telemetry, dt);
   updateHud(telemetry);
+  updateDebug(snapshot, telemetry);
+  logTelemetry(snapshot, telemetry, dt);
   renderer.render(scene, camera);
 }
 
@@ -117,6 +204,82 @@ function updateHud(telemetry: CarTelemetry) {
     hudScore.textContent = telemetry.score.toFixed(1);
   }
   hud.classList.toggle('hud-drifting', telemetry.driftActive);
+}
+
+function updateDebug(snapshot: InputSnapshot, telemetry: CarTelemetry) {
+  if (!debugEnabled) {
+    return;
+  }
+
+  const data: DebugData = {
+    steerInput: snapshot.steer,
+    throttle: snapshot.throttle,
+    brake: snapshot.brake,
+    handbrake: snapshot.handbrake,
+    steerAngleDeg: telemetry.steerAngleDeg,
+    yawRateDeg: telemetry.yawRateDeg,
+    slipAngleDeg: telemetry.slipAngleDeg,
+    frontSlipDeg: telemetry.frontSlipDeg,
+    rearSlipDeg: telemetry.rearSlipDeg,
+    lateralSpeed: telemetry.lateralSpeed,
+    longitudinalSpeed: telemetry.longitudinalSpeed,
+  };
+
+  debugFields.forEach((field) => {
+    const value = data[field.key];
+    const formatted = field.formatter ? field.formatter(value) : value.toFixed(2);
+    const valueElement = debugValues.get(field.key);
+    if (valueElement) {
+      valueElement.textContent = formatted;
+    }
+    const bar = debugBars.get(field.key);
+    if (bar) {
+      const normalized =
+        (THREE.MathUtils.clamp(value, field.min, field.max) - field.min) / (field.max - field.min);
+      const widthPercent = `${(normalized * 100).toFixed(1)}%`;
+      bar.style.setProperty('--fill', widthPercent);
+    }
+  });
+}
+
+function logTelemetry(snapshot: InputSnapshot, telemetry: CarTelemetry, dt: number) {
+  if (!debugEnabled) {
+    telemetryLogTimer = 0;
+    return;
+  }
+
+  telemetryLogTimer += dt;
+  const slipSpike =
+    Math.abs(telemetry.frontSlipDeg) > 28 ||
+    Math.abs(telemetry.rearSlipDeg) > 32 ||
+    Math.abs(telemetry.slipAngleDeg) > 25;
+
+  if (slipSpike || telemetryLogTimer >= 0.6) {
+    const normalizedProgress = telemetry.progress / track.totalLength;
+    const payload = {
+      progressMeters: telemetry.progress.toFixed(1),
+      progressPercent: (normalizedProgress * 100).toFixed(2),
+      steerInput: snapshot.steer.toFixed(2),
+      steerAngleDeg: telemetry.steerAngleDeg.toFixed(1),
+      yawRateDeg: telemetry.yawRateDeg.toFixed(1),
+      speedKmh: (telemetry.speed * 3.6).toFixed(1),
+      longSpeed: telemetry.longitudinalSpeed.toFixed(2),
+      latSpeed: telemetry.lateralSpeed.toFixed(2),
+      slipDeg: telemetry.slipAngleDeg.toFixed(1),
+      frontSlipDeg: telemetry.frontSlipDeg.toFixed(1),
+      rearSlipDeg: telemetry.rearSlipDeg.toFixed(1),
+      throttle: snapshot.throttle.toFixed(2),
+      brake: snapshot.brake.toFixed(2),
+      handbrake: snapshot.handbrake.toFixed(2),
+      gradePercent: telemetry.gradePercent.toFixed(2),
+    };
+    if (slipSpike) {
+      console.warn('[DriftForge] Slip spike', payload);
+    } else {
+      console.log('[DriftForge] Telemetry', payload);
+    }
+    telemetryLogTimer = 0;
+  }
 }
 
 function updateCarVisual(visual: CarVisual, state: CarState, dt: number) {
@@ -192,9 +355,11 @@ function createCarVisual(): CarVisual {
 
   const chassisGeometry = new THREE.BoxGeometry(3.4, 1.1, 6.1);
   const chassisMaterial = new THREE.MeshStandardMaterial({
-    color: 0x44d1ff,
-    metalness: 0.6,
-    roughness: 0.4,
+    color: 0x5ad2ff,
+    metalness: 0.55,
+    roughness: 0.35,
+    emissive: new THREE.Color(0x133350),
+    emissiveIntensity: 0.25,
   });
   const chassis = new THREE.Mesh(chassisGeometry, chassisMaterial);
   chassis.castShadow = true;
@@ -202,7 +367,7 @@ function createCarVisual(): CarVisual {
 
   const cabinGeometry = new THREE.BoxGeometry(2.2, 1, 2.7);
   const cabinMaterial = new THREE.MeshStandardMaterial({
-    color: 0x111a2f,
+    color: 0x0f1b33,
     roughness: 0.15,
     metalness: 0.1,
     transparent: true,
@@ -245,9 +410,9 @@ function createCarVisual(): CarVisual {
 
   const underglowGeometry = new THREE.PlaneGeometry(2.5, 5);
   const underglowMaterial = new THREE.MeshBasicMaterial({
-    color: 0x2ec5ff,
+    color: 0x39d0ff,
     transparent: true,
-    opacity: 0.16,
+    opacity: 0.22,
     side: THREE.DoubleSide,
   });
   const underglow = new THREE.Mesh(underglowGeometry, underglowMaterial);
@@ -267,9 +432,9 @@ function createCarVisual(): CarVisual {
 function createGround(): THREE.Mesh {
   const geometry = new THREE.CircleGeometry(1200, 72);
   const material = new THREE.MeshStandardMaterial({
-    color: 0x141c2e,
-    roughness: 0.9,
-    metalness: 0.04,
+    color: 0x20314a,
+    roughness: 0.82,
+    metalness: 0.08,
   });
   const ground = new THREE.Mesh(geometry, material);
   ground.rotation.x = -Math.PI / 2;
@@ -281,9 +446,9 @@ function createGround(): THREE.Mesh {
 function createBackgroundMountains(): THREE.Group {
   const group = new THREE.Group();
   const material = new THREE.MeshStandardMaterial({
-    color: 0x23314d,
-    roughness: 0.94,
-    metalness: 0.05,
+    color: 0x2c3d5f,
+    roughness: 0.92,
+    metalness: 0.08,
   });
   const geometry = new THREE.ConeGeometry(120, 160, 6);
   geometry.translate(0, 80, 0);
@@ -304,4 +469,46 @@ function createBackgroundMountains(): THREE.Group {
   });
 
   return group;
+}
+
+function createTrackGlow(trackSurface: TrackSurface): THREE.Mesh {
+  const geometry = new THREE.BufferGeometry();
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const colors: number[] = [];
+  const colorInner = new THREE.Color(0x3de0ff);
+  const colorOuter = new THREE.Color(0x001321);
+
+  trackSurface.samples.forEach((sample, index) => {
+    const inner = sample.position.clone().addScaledVector(sample.binormal, -sample.width * 0.22);
+    const outer = sample.position.clone().addScaledVector(sample.binormal, sample.width * 0.22);
+    const normal = sample.normal;
+
+    inner.addScaledVector(normal, 0.05);
+    outer.addScaledVector(normal, 0.05);
+
+    positions.push(inner.x, inner.y, inner.z, outer.x, outer.y, outer.z);
+    colors.push(colorInner.r, colorInner.g, colorInner.b, colorOuter.r, colorOuter.g, colorOuter.b);
+
+    if (index < trackSurface.samples.length - 1) {
+      const base = index * 2;
+      indices.push(base, base + 1, base + 2);
+      indices.push(base + 1, base + 3, base + 2);
+    }
+  });
+
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+
+  const material = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.5,
+    side: THREE.DoubleSide,
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.renderOrder = 2;
+  return mesh;
 }

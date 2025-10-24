@@ -47,3 +47,64 @@ canvas {
   box-shadow: 0 0 18px rgba(76, 230, 255, 0.4);
   border: 1px solid rgba(139, 220, 255, 0.4);
 }
+
+.debug-panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 12px 16px;
+  background: rgba(3, 9, 24, 0.82);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  min-width: 220px;
+  color: #d7e6ff;
+  pointer-events: none;
+  max-width: 260px;
+  display: none;
+}
+
+.debug-panel.visible {
+  display: block;
+}
+
+.debug-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.debug-row:last-child {
+  margin-bottom: 0;
+}
+
+.debug-label {
+  flex: 0 0 88px;
+  color: #77b9ff;
+}
+
+.debug-value {
+  flex: 0 0 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.debug-bar {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(80, 110, 160, 0.35);
+  position: relative;
+  overflow: hidden;
+}
+
+.debug-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(66, 215, 255, 0.9), rgba(55, 137, 255, 0.9));
+  width: var(--fill, 0%);
+}
