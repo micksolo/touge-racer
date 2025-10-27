@@ -33,8 +33,8 @@ export class InputController {
     const steer = Number(right) - Number(left);
 
     const throttle = this.keys.has('ArrowUp') || this.keys.has('KeyW') ? 1 : 0;
-    const brake = this.keys.has('Space') ? 1 : this.keys.has('ArrowDown') || this.keys.has('KeyS') ? 1 : 0;
-    const handbrake = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 1 : 0;
+    const brake = this.keys.has('ArrowDown') || this.keys.has('KeyS') ? 1 : 0;
+    const handbrake = this.keys.has('Space') || this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 1 : 0;
 
     return { steer, throttle, brake, handbrake };
   }

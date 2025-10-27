@@ -55,22 +55,12 @@ export class TrackSurface {
       const tangent = frames.tangents[i].clone();
       const binormal = frames.binormals[i].clone();
 
-      const crestDamp = THREE.MathUtils.lerp(
-        0.38,
-        1,
-        THREE.MathUtils.smoothstep(tNorm, 0.14, 0.32),
-      );
+      // No undulation - keep road surface geometrically consistent with computed normals
+      // Real roads follow smooth gradients without artificial waves
 
-      const undulation =
-        (Math.sin(tNorm * Math.PI * 5.1 + 0.3) * 4.6 +
-          Math.sin(tNorm * Math.PI * 11.7 + 1.2) * 1.8) *
-        crestDamp;
-      point.y += undulation;
-
-      const bankAngle =
-        (Math.sin(tNorm * Math.PI * 3.4 + 0.8) * THREE.MathUtils.degToRad(5.4) +
-          Math.sin(tNorm * Math.PI * 8.7 + 1.9) * THREE.MathUtils.degToRad(2.2)) *
-        crestDamp;
+      // NO banking - keep road flat for realistic driving
+      // Real mountain roads don't have significant banking
+      const bankAngle = 0;
       bankMatrix.makeRotationAxis(tangent, bankAngle);
       binormal.applyMatrix4(bankMatrix);
 
@@ -183,43 +173,85 @@ export class TrackSurface {
 
 export function createMountainTrack(): TrackSurface {
   const controlPoints = [
-    new THREE.Vector3(0, 168, 0),
-    new THREE.Vector3(-22, 162, -62),
-    new THREE.Vector3(-48, 152, -134),
-    new THREE.Vector3(-10, 140, -206),
-    new THREE.Vector3(54, 126, -276),
-    new THREE.Vector3(94, 112, -346),
-    new THREE.Vector3(46, 96, -412),
-    new THREE.Vector3(-32, 82, -468),
-    new THREE.Vector3(-76, 70, -522),
-    new THREE.Vector3(-28, 56, -582),
-    new THREE.Vector3(30, 40, -640),
-    new THREE.Vector3(74, 24, -706),
-    new THREE.Vector3(20, 10, -770),
-    new THREE.Vector3(-40, -8, -832),
-    new THREE.Vector3(-66, -26, -894),
-    new THREE.Vector3(-22, -48, -954),
-    new THREE.Vector3(40, -74, -1014),
-    new THREE.Vector3(88, -104, -1072),
-    new THREE.Vector3(32, -136, -1132),
-    new THREE.Vector3(-44, -164, -1190),
-    new THREE.Vector3(-18, -194, -1248),
-    new THREE.Vector3(42, -222, -1306),
-    new THREE.Vector3(86, -252, -1364),
-    new THREE.Vector3(28, -280, -1422),
-    new THREE.Vector3(-34, -306, -1480),
+    // === START - Summit approach ===
+    new THREE.Vector3(0, 60, 0),
+    new THREE.Vector3(-20, 59, -60),
+    new THREE.Vector3(-35, 58, -120),
+
+    // === RIGHT SWEEPER (downhill entry) ===
+    new THREE.Vector3(-30, 56, -190),
+    new THREE.Vector3(0, 54, -260),
+    new THREE.Vector3(40, 52, -320),
+    new THREE.Vector3(75, 50, -370),
+
+    // === CHICANE LEFT-RIGHT (technical section) ===
+    new THREE.Vector3(95, 48, -420),
+    new THREE.Vector3(85, 46, -480),
+    new THREE.Vector3(60, 44, -530),
+    new THREE.Vector3(70, 42, -590),
+    new THREE.Vector3(95, 40, -640),
+
+    // === LONG LEFT SWEEPER (drift section 1) ===
+    new THREE.Vector3(100, 38, -710),
+    new THREE.Vector3(80, 36, -790),
+    new THREE.Vector3(40, 34, -870),
+    new THREE.Vector3(-10, 32, -940),
+    new THREE.Vector3(-60, 30, -990),
+
+    // === HAIRPIN RIGHT (180° switchback) ===
+    new THREE.Vector3(-95, 28, -1030),
+    new THREE.Vector3(-110, 26, -1080),
+    new THREE.Vector3(-100, 24, -1140),
+    new THREE.Vector3(-60, 22, -1180),
+    new THREE.Vector3(-10, 20, -1200),
+
+    // === FAST STRAIGHT (downhill blast) ===
+    new THREE.Vector3(45, 18, -1220),
+    new THREE.Vector3(90, 16, -1250),
+
+    // === DOUBLE APEX RIGHT (tricky corner) ===
+    new THREE.Vector3(120, 14, -1300),
+    new THREE.Vector3(130, 12, -1370),
+    new THREE.Vector3(125, 10, -1450),
+
+    // === S-CURVES (flowing transitions) ===
+    new THREE.Vector3(100, 8, -1520),
+    new THREE.Vector3(60, 6, -1580),
+    new THREE.Vector3(40, 4, -1650),
+    new THREE.Vector3(50, 2, -1720),
+    new THREE.Vector3(80, 0, -1780),
+
+    // === LONG RIGHT SWEEPER (drift section 2) ===
+    new THREE.Vector3(115, -2, -1840),
+    new THREE.Vector3(140, -4, -1920),
+    new THREE.Vector3(150, -6, -2010),
+    new THREE.Vector3(145, -8, -2100),
+    new THREE.Vector3(120, -10, -2180),
+
+    // === HAIRPIN LEFT (180° switchback) ===
+    new THREE.Vector3(85, -12, -2240),
+    new THREE.Vector3(60, -14, -2290),
+    new THREE.Vector3(70, -16, -2350),
+    new THREE.Vector3(110, -18, -2390),
+    new THREE.Vector3(150, -20, -2410),
+
+    // === DOWNHILL ESSES (final technical) ===
+    new THREE.Vector3(170, -22, -2460),
+    new THREE.Vector3(150, -24, -2530),
+    new THREE.Vector3(120, -26, -2600),
+    new THREE.Vector3(110, -28, -2680),
+    new THREE.Vector3(130, -30, -2750),
+
+    // === FINAL STRAIGHT (finish) ===
+    new THREE.Vector3(150, -32, -2820),
+    new THREE.Vector3(160, -34, -2900),
+    new THREE.Vector3(165, -36, -2980),
   ];
 
   const curve = new THREE.CatmullRomCurve3(controlPoints, false, 'centripetal', 0.12);
-  const widthProfile: WidthProfile = (t) => {
-    const base = 21;
-    const rolling = Math.sin(t * Math.PI * 4.8 + 0.3) * 2.6;
-    const canyon = Math.exp(-Math.pow((t - 0.6) * 5.1, 2)) * -4.8;
-    const overlook = Math.exp(-Math.pow((t - 0.22) * 6, 2)) * 3.4;
-    const finale = Math.exp(-Math.pow((t - 0.86) * 7.6, 2)) * -2.6;
-    return THREE.MathUtils.clamp(base + rolling + canyon + overlook + finale, 16, 24.5);
-  };
-  return new TrackSurface({ curve, width: 21, widthProfile, segments: 1200 });
+
+  // Constant width of 32m - wide enough for 3-4 cars racing side by side
+  return new TrackSurface({ curve, width: 32, segments: 1800 });
 }
 
 function getRoadMaterial(): THREE.MeshStandardMaterial {

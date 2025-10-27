@@ -9,7 +9,7 @@ export interface CarSpec {
   power: number;
 }
 
-interface CarConfig {
+export interface CarConfig {
   mass: number;
   inertia: number;
   cgToFrontAxle: number;
@@ -23,7 +23,6 @@ interface CarConfig {
   dragCoefficient: number;
   rollingResistance: number;
   maxSteerAngle: number;
-  handbrakeGripScale: number;
   rideHeight: number;
   topSpeed: number;
   minDriftSpeed: number;
@@ -37,6 +36,12 @@ interface CarConfig {
   rearGripHighSpeedScale: number;
   highSpeedSteerLimit: number;
   yawRateLimit: number;
+  weightTransferGain: number;
+  throttleOversteerStrength: number;
+  handbrakeRearScale: number;
+  handbrakeDrag: number;
+  handbrakeYawBoost: number;
+  throttleYawGain: number;
 }
 
 export interface CarTelemetry {
@@ -70,6 +75,8 @@ export interface CarState {
   driftTime: number;
   driftCombo: number;
   driftActive: boolean;
+  driftMode: boolean;
+  driftModeTimer: number;
   slipAngle: number;
   gradePercent: number;
   progress: number;
@@ -96,6 +103,8 @@ export function createCarState(track: TrackSurface, spec: CarSpec): CarState {
     driftTime: 0,
     driftCombo: 0,
     driftActive: false,
+    driftMode: false,
+    driftModeTimer: 0,
     slipAngle: 0,
     gradePercent: startSample.tangent.y * 100,
     progress: startSample.distance,
@@ -103,6 +112,27 @@ export function createCarState(track: TrackSurface, spec: CarSpec): CarState {
     lastProjection: null,
     config,
   };
+}
+
+/**
+ * Arcade-style tire force model optimized for drift maintenance
+ * Maintains high lateral force at large slip angles to sustain drifts
+ */
+function arcadeTireForce(slipAngle: number, peakSlip: number, maxForce: number): number {
+  const normalizedSlip = Math.abs(slipAngle) / peakSlip;
+
+  let factor: number;
+  if (normalizedSlip < 1.0) {
+    // Before peak: sharp rise with some non-linearity
+    factor = normalizedSlip * (2 - normalizedSlip * normalizedSlip * 0.3);
+  } else {
+    // After peak: Gradual falloff to maintain control at high slip angles
+    // At 2x slip: ~83% force, at 3x: ~71%, at 4x: ~63%
+    // This lets counter-steering catch spinouts
+    factor = 1.0 / (1.0 + 0.20 * (normalizedSlip - 1.0));
+  }
+
+  return maxForce * factor * Math.sign(slipAngle);
 }
 
 export function stepCar(
@@ -136,32 +166,67 @@ export function stepCar(
   const steerGain = THREE.MathUtils.lerp(config.steerLowSpeedFactor, 1, steerSpeedFactor);
   const highSpeedFactor = THREE.MathUtils.smoothstep(speed, config.steerFullSpeed * 0.5, config.steerFullSpeed * 1.6);
   const steerLimit = THREE.MathUtils.lerp(1, config.highSpeedSteerLimit, highSpeedFactor);
-  const targetSteerAngle = -steerInput * config.maxSteerAngle * steerGain * steerLimit;
+  // Flip steering when going backwards (like a real car)
+  const reverseSteerFlip = vLong < -0.5 ? -1 : 1;
+  const targetSteerAngle = -steerInput * config.maxSteerAngle * steerGain * steerLimit * reverseSteerFlip;
   const steerRate = THREE.MathUtils.lerp(config.steerRateLow, config.steerRateHigh, steerSpeedFactor);
   const maxSteerDelta = steerRate * dt;
   const steerError = THREE.MathUtils.clamp(targetSteerAngle - state.steerAngle, -maxSteerDelta, maxSteerDelta);
+  // REMOVED steering centering force AND amplification - direct 1:1 response
   state.steerAngle += steerError;
 
   const effectiveSpeed = Math.max(Math.abs(vLong), 0.6);
-  const gripScale = input.handbrake > 0 ? config.handbrakeGripScale : 1;
+  // Handbrake only affects rear grip, not front - keeps steering functional
   const frontGripScale = THREE.MathUtils.lerp(1, config.frontGripHighSpeedScale, highSpeedFactor);
   const rearGripScale = THREE.MathUtils.lerp(1, config.rearGripHighSpeedScale, highSpeedFactor);
-  const Cf = config.corneringStiffnessFront * gripScale * frontGripScale;
-  const Cr = config.corneringStiffnessRear * gripScale * rearGripScale;
+  const totalTransfer = THREE.MathUtils.clamp((input.brake * 0.65 - input.throttle * 0.8) * config.weightTransferGain, -0.35, 0.35);
+  const frontLoad = THREE.MathUtils.clamp(1 + totalTransfer, 0.75, 1.5);
+  const rearLoad = THREE.MathUtils.clamp(1 - totalTransfer, 0.4, 1.4);
+  const lowSpeedBoost = THREE.MathUtils.clamp(1 - speed / 22, 0, 1);
+  const handbrakeRearScale = input.handbrake > 0 ? config.handbrakeRearScale : 1;
+  const Cf = config.corneringStiffnessFront * frontGripScale * frontLoad * (1 + 0.08 * lowSpeedBoost);
+
+  // REMOVED throttle oversteer grip reduction - it was stacking with other multipliers and killing all rear grip
+  // Natural oversteer comes from weight transfer (rearLoad) which is enough
+  const Cr = config.corneringStiffnessRear * rearGripScale * rearLoad * handbrakeRearScale;
 
   const alphaFront = Math.atan2(vLat + config.cgToFrontAxle * state.yawRate, effectiveSpeed) - state.steerAngle;
   const alphaRear = Math.atan2(vLat - config.cgToRearAxle * state.yawRate, effectiveSpeed);
 
-  const Fyf = -Cf * Math.tanh(alphaFront / config.slipAngleAtPeak);
-  const Fyr = -Cr * Math.tanh(alphaRear / config.slipAngleAtPeak);
+  const Fyf = -arcadeTireForce(alphaFront, config.slipAngleAtPeak, Cf);
+  const Fyr = -arcadeTireForce(alphaRear, config.slipAngleAtPeak, Cr);
 
-  const engineForce =
-    Math.max(0, input.throttle) *
-    config.engineForce *
-    (1 - THREE.MathUtils.clamp(speed / config.topSpeed, 0, 1));
+  // Reverse gear logic - when stopped and brake pressed, go reverse
+  const isStopped = Math.abs(vLong) < 1.5; // Nearly stopped (1.5 m/s ~ 5 km/h)
+  const isReversing = vLong < -0.5; // Moving backwards
+  const wantsReverse = isStopped && input.brake > 0 && input.throttle === 0;
+
+  let engineForce = 0;
+  let brakeForce = 0;
+
+  if (wantsReverse || isReversing) {
+    // Reverse mode
+    if (input.brake > 0) {
+      // Brake pedal becomes reverse throttle
+      const reverseSpeed = Math.abs(vLong);
+      const reverseTopSpeed = 10; // Max reverse speed (10 m/s ~ 36 km/h)
+      engineForce = -input.brake * config.engineForce * 0.6 *
+        (1 - THREE.MathUtils.clamp(reverseSpeed / reverseTopSpeed, 0, 1));
+    }
+    // Throttle acts as brake when reversing
+    if (input.throttle > 0 && isReversing) {
+      brakeForce = Math.sign(vLong) * input.throttle * config.brakeForce;
+    }
+  } else {
+    // Normal forward mode
+    engineForce = Math.max(0, input.throttle) *
+      config.engineForce *
+      (1 - THREE.MathUtils.clamp(speed / config.topSpeed, 0, 1));
+    brakeForce = Math.sign(vLong || 1) * Math.max(0, input.brake) * config.brakeForce;
+  }
+
   const dragging = config.dragCoefficient * vLong * Math.abs(vLong);
   const rolling = config.rollingResistance * Math.sign(vLong);
-  const brakeForce = Math.sign(vLong || 1) * Math.max(0, input.brake) * config.brakeForce;
   const handbrakeForce =
     Math.sign(vLong || 1) * Math.max(0, input.handbrake) * config.handbrakeBrakeForce;
 
@@ -169,22 +234,42 @@ export function stepCar(
     (engineForce - dragging - rolling - brakeForce - handbrakeForce) / config.mass + gradeAcceleration;
   const ay = (Fyf + Fyr) / config.mass;
 
+  // CRITICAL FIX: Proper bicycle model coupling - yaw MUST induce lateral velocity for drifting
+  // When rotating (yawRate) and moving forward (vLong), centripetal effect creates lateral motion
   const oldVLong = vLong;
   const oldVLat = vLat;
 
-  const crossLong = THREE.MathUtils.clamp(state.yawRate * oldVLat, -18, 18);
-  const crossLat = THREE.MathUtils.clamp(state.yawRate * oldVLong, -18, 18);
-
-  vLong += (ax + crossLong) * dt;
-  vLat += (ay - crossLat) * dt;
+  vLong += (ax + state.yawRate * oldVLat) * dt;
+  vLat += (ay - state.yawRate * oldVLong) * dt;
 
   const yawAcc = (config.cgToFrontAxle * Fyf - config.cgToRearAxle * Fyr) / config.inertia;
-  const yawResponse =
-    THREE.MathUtils.lerp(config.yawLowSpeedFactor, 1, steerSpeedFactor) *
-    THREE.MathUtils.lerp(1, 0.75, highSpeedFactor);
-  state.yawRate += yawAcc * dt * yawResponse;
-  state.yawRate *= 1 - Math.min(dt * 0.6, 0.08);
-  state.yawRate = THREE.MathUtils.clamp(state.yawRate, -config.yawRateLimit, config.yawRateLimit);
+  state.yawRate += yawAcc * dt;
+
+  // Minimal damping (3%) to prevent numerical instability without killing drifts
+  state.yawRate *= 1 - Math.min(dt * 0.03, 0.015);
+
+  // HANDBRAKE: Apply boost BEFORE clamping so it can actually work
+  if (input.handbrake > 0) {
+    // Use steering input to determine handbrake yaw direction (if steering, else use existing yaw)
+    const hbDir = steerInput !== 0 ? Math.sign(steerInput) : Math.sign(state.yawRate || 1);
+    state.yawRate += hbDir * config.handbrakeYawBoost * input.handbrake * dt;
+    const dragScale = Math.min(config.handbrakeDrag * input.handbrake * dt, 0.08);
+    vLong *= 1 - dragScale;
+  }
+
+  // DRIFT ASSISTS: Very minimal assist only during handbrake to help initiation
+  // Removed automatic throttle yaw assist - let physics handle oversteer naturally
+  const isDrifting = state.driftMode || input.handbrake > 0 || Math.abs(state.slipAngle) > THREE.MathUtils.degToRad(8);
+
+  // YAW CLAMP: Apply AFTER handbrake boost, with higher limits for drifting
+  const yawLimit = isDrifting
+    ? THREE.MathUtils.degToRad(150)  // Reasonable limit during drift for controllability
+    : config.yawRateLimit;  // Normal driving uses config value (45°/s)
+  state.yawRate = THREE.MathUtils.clamp(state.yawRate, -yawLimit, yawLimit);
+
+  // REMOVED all drift stabilization - pure physics only
+  // The tire model and player inputs handle everything
+
   state.yaw += state.yawRate * dt;
   state.yaw = normalizeAngle(state.yaw);
 
@@ -222,30 +307,48 @@ export function stepCar(
   const finalHeightError = finalTarget.sub(state.position).dot(sampleNormal);
   state.position.addScaledVector(sampleNormal, finalHeightError);
 
-  const approachingRail = Math.abs(state.lateralOffset) > clampLimit - 0.45;
-  if (approachingRail) {
-    const binormal2d = new THREE.Vector2(sampleBinormal.x, sampleBinormal.z);
-    if (binormal2d.lengthSq() > 0) {
-      binormal2d.normalize();
-      const lateralVel = state.velocity.dot(binormal2d);
-      const outwardSign = Math.sign(state.lateralOffset || 1);
-      if (lateralVel * outwardSign > 0) {
-        const correction = -lateralVel * 1.1;
-        state.velocity.addScaledVector(binormal2d, correction);
-      }
-    }
-    state.velocity.multiplyScalar(0.985);
-  }
+  // Removed boundary velocity correction - it was preventing drifts by suppressing lateral velocity
+  // Position is still clamped above (line 321), but velocity is free to slide
 
   state.progress = updatedProjection.sample.distance;
   state.gradePercent = updatedProjection.sample.tangent.y * 100;
   state.slipAngle = Math.atan2(vLat, Math.max(Math.abs(vLong), 0.1));
+
+  // Debug logging for drift mechanics (throttle every 30 frames ~0.5s)
+  if (Math.random() < 0.033 && (input.handbrake > 0 || Math.abs(state.slipAngle) > THREE.MathUtils.degToRad(5))) {
+    console.log('DRIFT DEBUG:', {
+      vLat: vLat.toFixed(2),
+      vLong: vLong.toFixed(2),
+      yawRate: THREE.MathUtils.radToDeg(state.yawRate).toFixed(1) + '°/s',
+      slipAngle: THREE.MathUtils.radToDeg(state.slipAngle).toFixed(1) + '°',
+      alphaFront: THREE.MathUtils.radToDeg(alphaFront).toFixed(1) + '°',
+      alphaRear: THREE.MathUtils.radToDeg(alphaRear).toFixed(1) + '°',
+      handbrake: input.handbrake.toFixed(2),
+    });
+  }
 
   const driftThreshold = config.driftThresholdDeg;
   const slipDeg = THREE.MathUtils.radToDeg(Math.abs(state.slipAngle));
   const driftSpeedOk = speed > config.minDriftSpeed;
   const driftActive = slipDeg > driftThreshold && driftSpeedOk;
   state.driftActive = driftActive;
+
+  // Drift mode management - enter drift mode with lower threshold for better control
+  const driftModeThreshold = 8; // Enter drift mode at 8° (very easy to enter)
+  const highSlipAngle = slipDeg > driftModeThreshold;
+  const handbrakeEngaged = input.handbrake > 0.2;
+
+  if ((highSlipAngle && driftSpeedOk) || (handbrakeEngaged && driftSpeedOk) || state.driftModeTimer > 0) {
+    state.driftMode = true;
+    state.driftModeTimer = Math.max(0, state.driftModeTimer - dt);
+
+    // Extend drift mode while still sliding (long grace period for counter-steer time)
+    if (highSlipAngle || handbrakeEngaged) {
+      state.driftModeTimer = 1.0; // 1 second grace period - plenty of time to counter-steer
+    }
+  } else {
+    state.driftMode = false;
+  }
   if (driftActive) {
     state.driftTime += dt;
     state.driftCombo = Math.min(state.driftCombo + dt, 5);
@@ -295,9 +398,9 @@ function createCarConfig(spec: CarSpec): CarConfig {
   const cgToFrontAxle = 1.08;
   const cgToRearAxle = wheelBase - cgToFrontAxle;
 
-  const cornerBase = 24000;
-  const corneringStiffnessFront = cornerBase + driftFactor * 14000;
-  const corneringStiffnessRear = (cornerBase + driftFactor * 16000) * (0.95 + driftFactor * 0.08);
+  const cornerBase = 20000;
+  const corneringStiffnessFront = cornerBase + driftFactor * 12000;
+  const corneringStiffnessRear = (cornerBase + driftFactor * 14000) * (0.85 + driftFactor * 0.08);
 
   const slipAngleAtPeak = THREE.MathUtils.degToRad(10 + driftFactor * 12);
 
@@ -315,20 +418,25 @@ function createCarConfig(spec: CarSpec): CarConfig {
     dragCoefficient: 0.52,
     rollingResistance: 90,
     maxSteerAngle: THREE.MathUtils.degToRad(32),
-    handbrakeGripScale: 0.25,
     rideHeight: 0.72,
     topSpeed: 44 + powerLevel * 5,
     minDriftSpeed: 9,
     driftThresholdDeg: 30,
-    steerLowSpeedFactor: 0.3,
-    steerFullSpeed: 34,
+    steerLowSpeedFactor: 0.36,
+    steerFullSpeed: 30,
     yawLowSpeedFactor: 0.12,
     steerRateLow: THREE.MathUtils.degToRad(120),
     steerRateHigh: THREE.MathUtils.degToRad(38),
-    frontGripHighSpeedScale: 0.85,
-    rearGripHighSpeedScale: 0.92,
-    highSpeedSteerLimit: 0.32,
-    yawRateLimit: THREE.MathUtils.degToRad(26),
+    frontGripHighSpeedScale: 0.75,  // Strong enough for counter-steering
+    rearGripHighSpeedScale: 0.58,  // Lower to enable drifting while staying controllable
+    highSpeedSteerLimit: 0.75,  // Good counter-steering authority
+    yawRateLimit: THREE.MathUtils.degToRad(45),
+    weightTransferGain: 0.50,  // Increased to help initiate drifts via weight shift
+    throttleOversteerStrength: 0,  // DISABLED - using weight transfer only
+    throttleYawGain: THREE.MathUtils.degToRad(280),
+    handbrakeRearScale: 0.30,  // Lower for easier handbrake drifts
+    handbrakeDrag: 1.8,
+    handbrakeYawBoost: THREE.MathUtils.degToRad(120),  // Increased for better handbrake response
   };
 }
 

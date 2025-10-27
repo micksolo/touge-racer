@@ -108,3 +108,43 @@ canvas {
   background: linear-gradient(90deg, rgba(66, 215, 255, 0.9), rgba(55, 137, 255, 0.9));
   width: var(--fill, 0%);
 }
+
+.tuning-panel {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  padding: 14px 16px;
+  width: 260px;
+  max-height: 52vh;
+  overflow-y: auto;
+  background: rgba(4, 10, 24, 0.78);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #d1e2ff;
+  font-size: 12px;
+}
+
+.tuning-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tuning-label {
+  font-weight: 600;
+  font-size: 11px;
+  color: #7abaff;
+}
+
+.tuning-row input[type='range'] {
+  width: 100%;
+}
+
+.tuning-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: #9fd0ff;
+  font-size: 11px;
+}

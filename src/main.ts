@@ -5,7 +5,7 @@ import type { TrackSurface } from './track';
 import { InputController } from './input';
 import type { InputSnapshot } from './input';
 import { createCarState, stepCar } from './carPhysics';
-import type { CarSpec, CarState, CarTelemetry } from './carPhysics';
+import type { CarSpec, CarState, CarTelemetry, CarConfig } from './carPhysics';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) {
@@ -80,6 +80,18 @@ const debugFields: DebugField[] = [
 
 const debugValues = new Map<keyof DebugData, HTMLSpanElement>();
 const debugBars = new Map<keyof DebugData, HTMLDivElement>();
+const tuningRows: Array<{ key: keyof CarConfig; label: string; min: number; max: number; step: number }> = [
+  { key: 'steerLowSpeedFactor', label: 'Steer Low', min: 0.2, max: 0.8, step: 0.02 },
+  { key: 'steerFullSpeed', label: 'Steer Full', min: 20, max: 60, step: 1 },
+  { key: 'frontGripHighSpeedScale', label: 'Front Grip', min: 0.4, max: 1.2, step: 0.02 },
+  { key: 'rearGripHighSpeedScale', label: 'Rear Grip', min: 0.3, max: 1.0, step: 0.02 },
+  { key: 'weightTransferGain', label: 'Weight Xfer', min: 0, max: 0.4, step: 0.01 },
+  { key: 'throttleOversteerStrength', label: 'Throttle OS', min: 0, max: 2, step: 0.05 },
+  { key: 'throttleYawGain', label: 'Yaw Gain', min: THREE.MathUtils.degToRad(60), max: THREE.MathUtils.degToRad(240), step: THREE.MathUtils.degToRad(5) },
+  { key: 'handbrakeRearScale', label: 'HB Rear', min: 0, max: 0.4, step: 0.02 },
+  { key: 'handbrakeDrag', label: 'HB Drag', min: 0, max: 5, step: 0.1 },
+  { key: 'handbrakeYawBoost', label: 'HB Yaw', min: THREE.MathUtils.degToRad(60), max: THREE.MathUtils.degToRad(240), step: THREE.MathUtils.degToRad(5) },
+];
 
 debugFields.forEach((field) => {
   const row = document.createElement('div');
@@ -104,6 +116,10 @@ debugFields.forEach((field) => {
   debugPanel.appendChild(row);
 });
 
+const tuningPanel = document.createElement('div');
+tuningPanel.className = 'tuning-panel';
+app.appendChild(tuningPanel);
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a2740);
 scene.fog = new THREE.Fog(0x1a2740, 140, 820);
@@ -116,7 +132,7 @@ scene.add(track.mesh);
 scene.add(createTrackGlow(track));
 
 scene.add(createGround());
-scene.add(createBackgroundMountains());
+// Removed background mountains - they looked like weird pyramids
 
 const ambient = new THREE.AmbientLight(0xa5bbff, 0.55);
 scene.add(ambient);
@@ -145,6 +161,41 @@ const carState = createCarState(track, carSpec);
 const carVisual = createCarVisual();
 carVisual.group.position.copy(carState.position);
 scene.add(carVisual.group);
+
+tuningRows.forEach((row) => {
+  const container = document.createElement('div');
+  container.className = 'tuning-row';
+
+  const label = document.createElement('label');
+  label.textContent = row.label;
+  label.className = 'tuning-label';
+  container.appendChild(label);
+
+  const inputSlider = document.createElement('input');
+  inputSlider.type = 'range';
+  inputSlider.min = String(row.min);
+  inputSlider.max = String(row.max);
+  inputSlider.step = String(row.step);
+  inputSlider.value = String(carState.config[row.key]);
+  inputSlider.addEventListener('input', () => {
+    const value = Number(inputSlider.value);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (carState.config as any)[row.key] = value;
+    valueDisplay.textContent = row.key === 'handbrakeYawBoost' || row.key === 'throttleYawGain'
+      ? `${THREE.MathUtils.radToDeg(value).toFixed(0)}°`
+      : value.toFixed(2);
+  });
+  container.appendChild(inputSlider);
+
+  const valueDisplay = document.createElement('span');
+  valueDisplay.className = 'tuning-value';
+  valueDisplay.textContent = row.key === 'handbrakeYawBoost' || row.key === 'throttleYawGain'
+    ? `${THREE.MathUtils.radToDeg(carState.config[row.key]).toFixed(0)}°`
+    : carState.config[row.key].toFixed(2);
+  container.appendChild(valueDisplay);
+
+  tuningPanel.appendChild(container);
+});
 
 const input = new InputController();
 const clock = new THREE.Clock();
@@ -443,33 +494,6 @@ function createGround(): THREE.Mesh {
   return ground;
 }
 
-function createBackgroundMountains(): THREE.Group {
-  const group = new THREE.Group();
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x2c3d5f,
-    roughness: 0.92,
-    metalness: 0.08,
-  });
-  const geometry = new THREE.ConeGeometry(120, 160, 6);
-  geometry.translate(0, 80, 0);
-
-  const positions = [
-    new THREE.Vector3(-260, -6, -80),
-    new THREE.Vector3(240, -6, -160),
-    new THREE.Vector3(160, -6, -360),
-    new THREE.Vector3(-200, -6, -420),
-  ];
-
-  positions.forEach((pos, idx) => {
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(pos);
-    mesh.scale.setScalar(0.7 + idx * 0.25);
-    mesh.receiveShadow = true;
-    group.add(mesh);
-  });
-
-  return group;
-}
 
 function createTrackGlow(trackSurface: TrackSurface): THREE.Mesh {
   const geometry = new THREE.BufferGeometry();
