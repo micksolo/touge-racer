@@ -26,6 +26,7 @@ hud.className = 'hud';
 hud.innerHTML = `
   <div><strong>Speed</strong><span id="hud-speed">0 km/h</span></div>
   <div><strong>Slip</strong><span id="hud-drift">0°</span></div>
+  <div><strong>State</strong><span id="hud-state">GRIP</span></div>
   <div><strong>Grade</strong><span id="hud-grade">0%</span></div>
   <div><strong>Score</strong><span id="hud-score">0</span></div>
 `;
@@ -33,6 +34,7 @@ app.appendChild(hud);
 
 const hudSpeed = document.querySelector<HTMLSpanElement>('#hud-speed');
 const hudDrift = document.querySelector<HTMLSpanElement>('#hud-drift');
+const hudState = document.querySelector<HTMLSpanElement>('#hud-state');
 const hudGrade = document.querySelector<HTMLSpanElement>('#hud-grade');
 const hudScore = document.querySelector<HTMLSpanElement>('#hud-score');
 
@@ -62,6 +64,8 @@ type DebugData = {
   rearSlipDeg: number;
   lateralSpeed: number;
   longitudinalSpeed: number;
+  driftStateName: string;
+  assistStrength: number;
 };
 
 const debugFields: DebugField[] = [
@@ -76,22 +80,11 @@ const debugFields: DebugField[] = [
   { key: 'rearSlipDeg', label: 'Rear°', min: -60, max: 60, formatter: (v) => `${v.toFixed(1)}` },
   { key: 'lateralSpeed', label: 'Lat m/s', min: -20, max: 20, formatter: (v) => `${v.toFixed(2)}` },
   { key: 'longitudinalSpeed', label: 'Long m/s', min: -60, max: 60, formatter: (v) => `${v.toFixed(2)}` },
+  { key: 'assistStrength', label: 'Assist', min: 0, max: 1, formatter: (v) => `${(v * 100).toFixed(0)}%` },
 ];
 
 const debugValues = new Map<keyof DebugData, HTMLSpanElement>();
 const debugBars = new Map<keyof DebugData, HTMLDivElement>();
-const tuningRows: Array<{ key: keyof CarConfig; label: string; min: number; max: number; step: number }> = [
-  { key: 'steerLowSpeedFactor', label: 'Steer Low', min: 0.2, max: 0.8, step: 0.02 },
-  { key: 'steerFullSpeed', label: 'Steer Full', min: 20, max: 60, step: 1 },
-  { key: 'frontGripHighSpeedScale', label: 'Front Grip', min: 0.4, max: 1.2, step: 0.02 },
-  { key: 'rearGripHighSpeedScale', label: 'Rear Grip', min: 0.3, max: 1.0, step: 0.02 },
-  { key: 'weightTransferGain', label: 'Weight Xfer', min: 0, max: 0.4, step: 0.01 },
-  { key: 'throttleOversteerStrength', label: 'Throttle OS', min: 0, max: 2, step: 0.05 },
-  { key: 'throttleYawGain', label: 'Yaw Gain', min: THREE.MathUtils.degToRad(60), max: THREE.MathUtils.degToRad(240), step: THREE.MathUtils.degToRad(5) },
-  { key: 'handbrakeRearScale', label: 'HB Rear', min: 0, max: 0.4, step: 0.02 },
-  { key: 'handbrakeDrag', label: 'HB Drag', min: 0, max: 5, step: 0.1 },
-  { key: 'handbrakeYawBoost', label: 'HB Yaw', min: THREE.MathUtils.degToRad(60), max: THREE.MathUtils.degToRad(240), step: THREE.MathUtils.degToRad(5) },
-];
 
 debugFields.forEach((field) => {
   const row = document.createElement('div');
@@ -116,9 +109,15 @@ debugFields.forEach((field) => {
   debugPanel.appendChild(row);
 });
 
-const tuningPanel = document.createElement('div');
-tuningPanel.className = 'tuning-panel';
-app.appendChild(tuningPanel);
+// Load saved values from localStorage or use defaults
+const getSavedValue = (key: string, defaultValue: number): number => {
+  const saved = localStorage.getItem(`feel_${key}`);
+  return saved !== null ? Number(saved) : defaultValue;
+};
+
+const saveValue = (key: string, value: number) => {
+  localStorage.setItem(`feel_${key}`, String(value));
+};
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a2740);
@@ -162,39 +161,244 @@ const carVisual = createCarVisual();
 carVisual.group.position.copy(carState.position);
 scene.add(carVisual.group);
 
-tuningRows.forEach((row) => {
-  const container = document.createElement('div');
-  container.className = 'tuning-row';
+// Simple Feel Tuning Panel (must be after carState creation)
+const feelPanel = document.createElement('div');
+feelPanel.className = 'feel-panel';
+app.appendChild(feelPanel);
 
-  const label = document.createElement('label');
-  label.textContent = row.label;
-  label.className = 'tuning-label';
-  container.appendChild(label);
+const feelTitleContainer = document.createElement('div');
+feelTitleContainer.style.display = 'flex';
+feelTitleContainer.style.justifyContent = 'space-between';
+feelTitleContainer.style.alignItems = 'center';
+feelTitleContainer.style.marginBottom = '18px';
 
-  const inputSlider = document.createElement('input');
-  inputSlider.type = 'range';
-  inputSlider.min = String(row.min);
-  inputSlider.max = String(row.max);
-  inputSlider.step = String(row.step);
-  inputSlider.value = String(carState.config[row.key]);
-  inputSlider.addEventListener('input', () => {
-    const value = Number(inputSlider.value);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (carState.config as any)[row.key] = value;
-    valueDisplay.textContent = row.key === 'handbrakeYawBoost' || row.key === 'throttleYawGain'
-      ? `${THREE.MathUtils.radToDeg(value).toFixed(0)}°`
-      : value.toFixed(2);
-  });
-  container.appendChild(inputSlider);
+const feelTitle = document.createElement('div');
+feelTitle.className = 'feel-panel-title';
+feelTitle.textContent = 'Car Feel Tuning';
+feelTitle.style.marginBottom = '0';
+feelTitleContainer.appendChild(feelTitle);
+
+const resetButton = document.createElement('button');
+resetButton.textContent = 'Reset';
+resetButton.className = 'feel-reset-button';
+feelTitleContainer.appendChild(resetButton);
+
+feelPanel.appendChild(feelTitleContainer);
+
+type FeelControl = {
+  key: string;
+  label: string;
+  description: string;
+  min: number;
+  max: number;
+  defaultValue: number;
+  step: number;
+  onChange: (value: number) => void;
+  format: (value: number) => string;
+};
+
+const feelControls: FeelControl[] = [
+  {
+    key: 'overallGrip',
+    label: 'Overall Grip',
+    description: 'How sticky the tires are (higher = more grip, less sliding)',
+    min: 0.2,
+    max: 3.5,
+    defaultValue: 1.0,
+    step: 0.05,
+    format: (v) => `${(v * 100).toFixed(0)}%`,
+    onChange: (value) => {
+      const baseFront = 22000;
+      const baseRear = 18000;
+      const balanceMultiplier = (carState.config as any).frontRearBalance ?? 1.5;
+      carState.config.corneringStiffnessFront = baseFront * value * balanceMultiplier;
+      carState.config.corneringStiffnessRear = baseRear * value;
+      saveValue('overallGrip', value);
+      console.log(`[Feel] Overall Grip: ${(value * 100).toFixed(0)}%, Front: ${(baseFront * value * balanceMultiplier).toFixed(0)}, Rear: ${(baseRear * value).toFixed(0)}, Ratio: ${balanceMultiplier.toFixed(2)}:1`);
+    }
+  },
+  {
+    key: 'frontRearBalance',
+    label: 'Front/Rear Grip Balance',
+    description: 'Front grip vs rear (higher = more front grip, easier to drift)',
+    min: 0.5,
+    max: 4.0,
+    defaultValue: 1.5,
+    step: 0.1,
+    format: (v) => `${v.toFixed(1)}:1`,
+    onChange: (value) => {
+      (carState.config as any).frontRearBalance = value;
+      const overallGrip = getSavedValue('overallGrip', 1.0);
+      const baseFront = 22000;
+      const baseRear = 18000;
+      carState.config.corneringStiffnessFront = baseFront * overallGrip * value;
+      carState.config.corneringStiffnessRear = baseRear * overallGrip;
+      saveValue('frontRearBalance', value);
+      console.log(`[Feel] Front/Rear Balance: ${value.toFixed(1)}:1, Front: ${(baseFront * overallGrip * value).toFixed(0)}, Rear: ${(baseRear * overallGrip).toFixed(0)}`);
+    }
+  },
+  {
+    key: 'driftSensitivity',
+    label: 'Drift Sensitivity',
+    description: 'How easily drifts start (higher = harder to drift, more grip driving)',
+    min: 5,
+    max: 45,
+    defaultValue: 22,
+    step: 1,
+    format: (v) => `${v.toFixed(0)}°`,
+    onChange: (value) => {
+      carState.config.driftThresholdSlip = value;
+      saveValue('driftSensitivity', value);
+      console.log(`[Feel] Drift Sensitivity: ${value.toFixed(0)}°`);
+    }
+  },
+  {
+    key: 'straighteningForce',
+    label: 'Straightening Force',
+    description: 'How quickly car stops rotating and straightens out',
+    min: 0.5,
+    max: 50,
+    defaultValue: 12,
+    step: 0.5,
+    format: (v) => `${v.toFixed(1)}`,
+    onChange: (value) => {
+      carState.config.yawDragCoeff = value;
+      saveValue('straighteningForce', value);
+      console.log(`[Feel] Straightening Force: ${value.toFixed(1)}`);
+    }
+  },
+  {
+    key: 'counterSteerStrength',
+    label: 'Counter-Steer Strength',
+    description: 'How much counter-steering helps (lower = gentler, higher = more aggressive)',
+    min: 0,
+    max: 2.0,
+    defaultValue: 0.25,
+    step: 0.05,
+    format: (v) => `${(v * 100).toFixed(0)}%`,
+    onChange: (value) => {
+      carState.config.counterSteerBoost = value;
+      saveValue('counterSteerStrength', value);
+      console.log(`[Feel] Counter-Steer Strength: ${(value * 100).toFixed(0)}%`);
+    }
+  },
+  {
+    key: 'steeringSpeed',
+    label: 'Steering Response Speed',
+    description: 'How fast steering reacts to keyboard taps (lower = smoother, higher = snappier)',
+    min: 0.5,
+    max: 30,
+    defaultValue: 8.0,
+    step: 0.5,
+    format: (v) => `${v.toFixed(1)}`,
+    onChange: (value) => {
+      carState.config.steeringAttackRate = value;
+      saveValue('steeringSpeed', value);
+      console.log(`[Feel] Steering Response Speed: ${value.toFixed(1)}`);
+    }
+  },
+  {
+    key: 'steeringStrength',
+    label: 'Steering Strength',
+    description: 'How much the car turns when you tap (lower = gentler turns, higher = sharper)',
+    min: 0.3,
+    max: 2.0,
+    defaultValue: 1.0,
+    step: 0.05,
+    format: (v) => `${(v * 100).toFixed(0)}%`,
+    onChange: (value) => {
+      (carState.config as any).steeringStrengthMultiplier = value;
+      saveValue('steeringStrength', value);
+      console.log(`[Feel] Steering Strength: ${(value * 100).toFixed(0)}%`);
+    }
+  },
+  {
+    key: 'weightShiftFeel',
+    label: 'Weight Shift Feel',
+    description: 'How much car nose-dives when braking (higher = more dramatic)',
+    min: 0.3,
+    max: 0.8,
+    defaultValue: 0.52,
+    step: 0.02,
+    format: (v) => `${v.toFixed(2)}`,
+    onChange: (value) => {
+      carState.config.heightCG = value;
+      saveValue('weightShiftFeel', value);
+      console.log(`[Feel] Weight Shift Feel: ${value.toFixed(2)}`);
+    }
+  }
+];
+
+// Store slider references for reset functionality
+const sliderMap = new Map<string, { slider: HTMLInputElement; display: HTMLSpanElement; control: FeelControl }>();
+
+feelControls.forEach((control) => {
+  const row = document.createElement('div');
+  row.className = 'feel-row';
+
+  const labelContainer = document.createElement('label');
+  labelContainer.className = 'feel-label';
+
+  const labelText = document.createElement('span');
+  labelText.textContent = control.label;
+  labelContainer.appendChild(labelText);
 
   const valueDisplay = document.createElement('span');
-  valueDisplay.className = 'tuning-value';
-  valueDisplay.textContent = row.key === 'handbrakeYawBoost' || row.key === 'throttleYawGain'
-    ? `${THREE.MathUtils.radToDeg(carState.config[row.key]).toFixed(0)}°`
-    : carState.config[row.key].toFixed(2);
-  container.appendChild(valueDisplay);
+  valueDisplay.className = 'feel-value';
+  labelContainer.appendChild(valueDisplay);
 
-  tuningPanel.appendChild(container);
+  row.appendChild(labelContainer);
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = String(control.min);
+  slider.max = String(control.max);
+  slider.step = String(control.step);
+
+  // Load saved value or use default
+  const initialValue = getSavedValue(control.key, control.defaultValue);
+  slider.value = String(initialValue);
+  valueDisplay.textContent = control.format(initialValue);
+
+  // Initialize config with saved value
+  control.onChange(initialValue);
+
+  slider.addEventListener('input', () => {
+    const value = Number(slider.value);
+    control.onChange(value);
+    valueDisplay.textContent = control.format(value);
+  });
+  // Prevent arrow keys from affecting sliders (interferes with driving)
+  slider.addEventListener('keydown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  // Prevent sliders from stealing focus
+  slider.addEventListener('mousedown', () => {
+    setTimeout(() => slider.blur(), 0);
+  });
+  row.appendChild(slider);
+
+  const description = document.createElement('div');
+  description.className = 'feel-description';
+  description.textContent = control.description;
+  row.appendChild(description);
+
+  feelPanel.appendChild(row);
+
+  sliderMap.set(control.key, { slider, display: valueDisplay, control });
+});
+
+// Reset button functionality
+resetButton.addEventListener('click', () => {
+  console.log('[Feel] Resetting to defaults...');
+  sliderMap.forEach(({ slider, display, control }) => {
+    slider.value = String(control.defaultValue);
+    display.textContent = control.format(control.defaultValue);
+    control.onChange(control.defaultValue);
+    localStorage.removeItem(`feel_${control.key}`);
+  });
+  console.log('[Feel] Reset complete!');
 });
 
 const input = new InputController();
@@ -207,18 +411,28 @@ const tmpRight = new THREE.Vector3();
 const tmpTarget = new THREE.Vector3();
 let debugEnabled = false;
 let telemetryLogTimer = 0;
+let diagnosticMode = false;
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'KeyP') {
     debugEnabled = !debugEnabled;
     debugPanel.classList.toggle('visible', debugEnabled);
   }
+  if (event.code === 'KeyD') {
+    diagnosticMode = !diagnosticMode;
+    if (diagnosticMode) {
+      console.log('🔬 DIAGNOSTIC MODE ENABLED - Watch console for detailed physics breakdown');
+      console.log('Press D again to disable');
+    } else {
+      console.log('🔬 DIAGNOSTIC MODE DISABLED');
+    }
+  }
 });
 
 function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const snapshot = input.getSnapshot();
-  const telemetry = stepCar(carState, snapshot, track, dt);
+  const telemetry = stepCar(carState, snapshot, track, dt, diagnosticMode);
   updateCarVisual(carVisual, carState, dt);
   updateCamera(camera, carState, telemetry, dt);
   updateHud(telemetry);
@@ -248,6 +462,9 @@ function updateHud(telemetry: CarTelemetry) {
   if (hudDrift) {
     hudDrift.textContent = `${telemetry.slipAngleDeg.toFixed(0)}°`;
   }
+  if (hudState) {
+    hudState.textContent = telemetry.driftStateName;
+  }
   if (hudGrade) {
     hudGrade.textContent = `${telemetry.gradePercent.toFixed(1)}%`;
   }
@@ -274,10 +491,12 @@ function updateDebug(snapshot: InputSnapshot, telemetry: CarTelemetry) {
     rearSlipDeg: telemetry.rearSlipDeg,
     lateralSpeed: telemetry.lateralSpeed,
     longitudinalSpeed: telemetry.longitudinalSpeed,
+    driftStateName: telemetry.driftStateName,
+    assistStrength: telemetry.assistStrength,
   };
 
   debugFields.forEach((field) => {
-    const value = data[field.key];
+    const value = data[field.key] as number;  // All debugFields are numeric
     const formatted = field.formatter ? field.formatter(value) : value.toFixed(2);
     const valueElement = debugValues.get(field.key);
     if (valueElement) {
