@@ -161,7 +161,7 @@ const carVisual = createCarVisual();
 carVisual.group.position.copy(carState.position);
 scene.add(carVisual.group);
 
-// Simple Feel Tuning Panel (must be after carState creation)
+// Simple Arcade Tuning Panel
 const feelPanel = document.createElement('div');
 feelPanel.className = 'feel-panel';
 app.appendChild(feelPanel);
@@ -174,7 +174,7 @@ feelTitleContainer.style.marginBottom = '18px';
 
 const feelTitle = document.createElement('div');
 feelTitle.className = 'feel-panel-title';
-feelTitle.textContent = 'Car Feel Tuning';
+feelTitle.textContent = 'Arcade Tuning';
 feelTitle.style.marginBottom = '0';
 feelTitleContainer.appendChild(feelTitle);
 
@@ -199,132 +199,78 @@ type FeelControl = {
 
 const feelControls: FeelControl[] = [
   {
-    key: 'overallGrip',
-    label: 'Overall Grip',
-    description: 'How sticky the tires are (higher = more grip, less sliding)',
-    min: 0.2,
-    max: 3.5,
-    defaultValue: 1.0,
-    step: 0.05,
-    format: (v) => `${(v * 100).toFixed(0)}%`,
+    key: 'turnSpeed',
+    label: 'Turn Speed',
+    description: 'How fast the car turns during normal driving',
+    min: 30,
+    max: 180,
+    defaultValue: 90,
+    step: 5,
+    format: (v) => `${v.toFixed(0)}°/s`,
     onChange: (value) => {
-      const baseFront = 22000;
-      const baseRear = 18000;
-      const balanceMultiplier = (carState.config as any).frontRearBalance ?? 1.5;
-      carState.config.corneringStiffnessFront = baseFront * value * balanceMultiplier;
-      carState.config.corneringStiffnessRear = baseRear * value;
-      saveValue('overallGrip', value);
-      console.log(`[Feel] Overall Grip: ${(value * 100).toFixed(0)}%, Front: ${(baseFront * value * balanceMultiplier).toFixed(0)}, Rear: ${(baseRear * value).toFixed(0)}, Ratio: ${balanceMultiplier.toFixed(2)}:1`);
+      carState.config.gripTurnRate = THREE.MathUtils.degToRad(value);
+      saveValue('turnSpeed', value);
+      console.log(`[Arcade] Turn Speed: ${value}°/s`);
     }
   },
   {
-    key: 'frontRearBalance',
-    label: 'Front/Rear Grip Balance',
-    description: 'Front grip vs rear (higher = more front grip, easier to drift)',
-    min: 0.5,
-    max: 4.0,
-    defaultValue: 1.5,
-    step: 0.1,
-    format: (v) => `${v.toFixed(1)}:1`,
+    key: 'driftTurnSpeed',
+    label: 'Drift Turn Speed',
+    description: 'How fast the car rotates when drifting',
+    min: 60,
+    max: 300,
+    defaultValue: 170,
+    step: 10,
+    format: (v) => `${v.toFixed(0)}°/s`,
     onChange: (value) => {
-      (carState.config as any).frontRearBalance = value;
-      const overallGrip = getSavedValue('overallGrip', 1.0);
-      const baseFront = 22000;
-      const baseRear = 18000;
-      carState.config.corneringStiffnessFront = baseFront * overallGrip * value;
-      carState.config.corneringStiffnessRear = baseRear * overallGrip;
-      saveValue('frontRearBalance', value);
-      console.log(`[Feel] Front/Rear Balance: ${value.toFixed(1)}:1, Front: ${(baseFront * overallGrip * value).toFixed(0)}, Rear: ${(baseRear * overallGrip).toFixed(0)}`);
+      carState.config.driftTurnRate = THREE.MathUtils.degToRad(value);
+      saveValue('driftTurnSpeed', value);
+      console.log(`[Arcade] Drift Turn Speed: ${value}°/s`);
     }
   },
   {
-    key: 'driftSensitivity',
-    label: 'Drift Sensitivity',
-    description: 'How easily drifts start (higher = harder to drift, more grip driving)',
+    key: 'driftLooseness',
+    label: 'Drift Looseness',
+    description: 'How slidey the drift feels (lower = more slide)',
     min: 5,
-    max: 45,
-    defaultValue: 22,
-    step: 1,
-    format: (v) => `${v.toFixed(0)}°`,
-    onChange: (value) => {
-      carState.config.driftThresholdSlip = value;
-      saveValue('driftSensitivity', value);
-      console.log(`[Feel] Drift Sensitivity: ${value.toFixed(0)}°`);
-    }
-  },
-  {
-    key: 'straighteningForce',
-    label: 'Straightening Force',
-    description: 'How quickly car stops rotating and straightens out',
-    min: 0.5,
     max: 50,
-    defaultValue: 12,
-    step: 0.5,
-    format: (v) => `${v.toFixed(1)}`,
+    defaultValue: 15,
+    step: 1,
+    format: (v) => `${v.toFixed(0)}%`,
     onChange: (value) => {
-      carState.config.yawDragCoeff = value;
-      saveValue('straighteningForce', value);
-      console.log(`[Feel] Straightening Force: ${value.toFixed(1)}`);
+      carState.config.driftVelocityFollow = value / 100;
+      saveValue('driftLooseness', value);
+      console.log(`[Arcade] Drift Looseness: ${value}%`);
     }
   },
   {
-    key: 'counterSteerStrength',
-    label: 'Counter-Steer Strength',
-    description: 'How much counter-steering helps (lower = gentler, higher = more aggressive)',
+    key: 'handbrakePower',
+    label: 'Handbrake Power',
+    description: 'Extra rotation kick when using handbrake',
     min: 0,
-    max: 2.0,
-    defaultValue: 0.25,
-    step: 0.05,
-    format: (v) => `${(v * 100).toFixed(0)}%`,
+    max: 250,
+    defaultValue: 120,
+    step: 10,
+    format: (v) => `${v.toFixed(0)}°/s`,
     onChange: (value) => {
-      carState.config.counterSteerBoost = value;
-      saveValue('counterSteerStrength', value);
-      console.log(`[Feel] Counter-Steer Strength: ${(value * 100).toFixed(0)}%`);
+      carState.config.handbrakeBoost = THREE.MathUtils.degToRad(value);
+      saveValue('handbrakePower', value);
+      console.log(`[Arcade] Handbrake Power: ${value}°/s`);
     }
   },
   {
-    key: 'steeringSpeed',
-    label: 'Steering Response Speed',
-    description: 'How fast steering reacts to keyboard taps (lower = smoother, higher = snappier)',
-    min: 0.5,
-    max: 30,
-    defaultValue: 8.0,
-    step: 0.5,
-    format: (v) => `${v.toFixed(1)}`,
+    key: 'topSpeed',
+    label: 'Top Speed',
+    description: 'Maximum speed (higher = faster car)',
+    min: 30,
+    max: 80,
+    defaultValue: 56,
+    step: 2,
+    format: (v) => `${(v * 3.6).toFixed(0)} km/h`,
     onChange: (value) => {
-      carState.config.steeringAttackRate = value;
-      saveValue('steeringSpeed', value);
-      console.log(`[Feel] Steering Response Speed: ${value.toFixed(1)}`);
-    }
-  },
-  {
-    key: 'steeringStrength',
-    label: 'Steering Strength',
-    description: 'How much the car turns when you tap (lower = gentler turns, higher = sharper)',
-    min: 0.3,
-    max: 2.0,
-    defaultValue: 1.0,
-    step: 0.05,
-    format: (v) => `${(v * 100).toFixed(0)}%`,
-    onChange: (value) => {
-      (carState.config as any).steeringStrengthMultiplier = value;
-      saveValue('steeringStrength', value);
-      console.log(`[Feel] Steering Strength: ${(value * 100).toFixed(0)}%`);
-    }
-  },
-  {
-    key: 'weightShiftFeel',
-    label: 'Weight Shift Feel',
-    description: 'How much car nose-dives when braking (higher = more dramatic)',
-    min: 0.3,
-    max: 0.8,
-    defaultValue: 0.52,
-    step: 0.02,
-    format: (v) => `${v.toFixed(2)}`,
-    onChange: (value) => {
-      carState.config.heightCG = value;
-      saveValue('weightShiftFeel', value);
-      console.log(`[Feel] Weight Shift Feel: ${value.toFixed(2)}`);
+      carState.config.topSpeed = value;
+      saveValue('topSpeed', value);
+      console.log(`[Arcade] Top Speed: ${(value * 3.6).toFixed(0)} km/h`);
     }
   }
 ];
@@ -391,14 +337,14 @@ feelControls.forEach((control) => {
 
 // Reset button functionality
 resetButton.addEventListener('click', () => {
-  console.log('[Feel] Resetting to defaults...');
+  console.log('[Arcade] Resetting to defaults...');
   sliderMap.forEach(({ slider, display, control }) => {
     slider.value = String(control.defaultValue);
     display.textContent = control.format(control.defaultValue);
     control.onChange(control.defaultValue);
     localStorage.removeItem(`feel_${control.key}`);
   });
-  console.log('[Feel] Reset complete!');
+  console.log('[Arcade] Reset complete!');
 });
 
 const input = new InputController();
