@@ -171,8 +171,8 @@ export class TrackSurface {
   }
 }
 
-export function createMountainTrack(): TrackSurface {
-  const controlPoints = [
+function getDefaultTrackControlPoints(): THREE.Vector3[] {
+  return [
     // === START - Summit approach ===
     new THREE.Vector3(0, 60, 0),
     new THREE.Vector3(-20, 59, -60),
@@ -247,11 +247,52 @@ export function createMountainTrack(): TrackSurface {
     new THREE.Vector3(160, -34, -2900),
     new THREE.Vector3(165, -36, -2980),
   ];
+}
 
+export function saveTrackToStorage(points: THREE.Vector3[]): void {
+  const data = points.map(p => ({ x: p.x, y: p.y, z: p.z }));
+  localStorage.setItem('savedTrack', JSON.stringify(data));
+  console.log('✓ Track saved to browser storage');
+}
+
+export function loadTrackFromStorage(): THREE.Vector3[] | null {
+  const saved = localStorage.getItem('savedTrack');
+  if (!saved) return null;
+
+  try {
+    const data = JSON.parse(saved);
+    return data.map((p: { x: number; y: number; z: number }) =>
+      new THREE.Vector3(p.x, p.y, p.z)
+    );
+  } catch (e) {
+    console.error('Failed to load saved track:', e);
+    return null;
+  }
+}
+
+export function resetTrackToDefault(): void {
+  localStorage.removeItem('savedTrack');
+  console.log('✓ Track reset to default');
+}
+
+export function getTrackControlPoints(): THREE.Vector3[] {
+  // Try to load saved track, otherwise use default
+  const saved = loadTrackFromStorage();
+  if (saved) {
+    console.log('📍 Loaded saved track from storage');
+    return saved;
+  }
+  console.log('📍 Using default track');
+  return getDefaultTrackControlPoints();
+}
+
+export function createMountainTrack(): TrackSurface {
+  const controlPoints = getTrackControlPoints();
   const curve = new THREE.CatmullRomCurve3(controlPoints, false, 'centripetal', 0.12);
 
-  // Constant width of 32m - wide enough for 3-4 cars racing side by side
-  return new TrackSurface({ curve, width: 32, segments: 1800 });
+  // Constant width of 24m - narrower to prevent overlaps on tight corners
+  // (You can adjust this value - smaller = tighter corners possible)
+  return new TrackSurface({ curve, width: 24, segments: 1800 });
 }
 
 function getRoadMaterial(): THREE.MeshStandardMaterial {

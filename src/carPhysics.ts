@@ -385,6 +385,18 @@ export function stepCar(
   const correctedLateral = state.position.clone().sub(updatedProjection.projected).dot(sampleBinormal);
   state.lateralOffset = THREE.MathUtils.clamp(correctedLateral, -clampLimit, clampLimit);
 
+  // Guardrail collision - slow down when hitting track edges
+  const edgeThreshold = clampLimit * 0.9; // Start penalty at 90% of track edge
+  const absLateral = Math.abs(state.lateralOffset);
+  if (absLateral > edgeThreshold) {
+    const collisionAmount = (absLateral - edgeThreshold) / (clampLimit - edgeThreshold);
+    const speedPenalty = 0.97 - (collisionAmount * 0.08); // 97% to 89% speed retention per frame
+    state.forwardSpeed *= speedPenalty;
+    // Gentle scrub of lateral velocity when hitting walls
+    const lateralVelReduction = 0.92;
+    state.velocity.multiplyScalar(lateralVelReduction);
+  }
+
   const finalTarget = updatedProjection.projected
     .clone()
     .addScaledVector(sampleNormal, config.rideHeight)
