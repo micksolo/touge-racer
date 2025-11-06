@@ -55,16 +55,13 @@ export class TrackSurface {
       const tangent = frames.tangents[i].clone();
       const binormal = frames.binormals[i].clone();
 
-      // No undulation - keep road surface geometrically consistent with computed normals
-      // Real roads follow smooth gradients without artificial waves
+      // FORCE FLAT ROAD - Override Frenet frame to keep road horizontal
+      // Touge roads should be flat, not banked
+      const normal = new THREE.Vector3(0, 1, 0); // Always point straight up
 
-      // NO banking - keep road flat for realistic driving
-      // Real mountain roads don't have significant banking
-      const bankAngle = 0;
-      bankMatrix.makeRotationAxis(tangent, bankAngle);
-      binormal.applyMatrix4(bankMatrix);
-
-      const normal = new THREE.Vector3().crossVectors(binormal, tangent).normalize();
+      // Recalculate binormal to be perpendicular to tangent and up vector
+      // This keeps the road flat while following the curve
+      binormal.crossVectors(normal, tangent).normalize();
 
       const left = point.clone().addScaledVector(binormal, localWidth * 0.5);
       const right = point.clone().addScaledVector(binormal, -localWidth * 0.5);
