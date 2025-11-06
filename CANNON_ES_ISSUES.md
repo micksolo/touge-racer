@@ -1,9 +1,59 @@
 # Cannon-ES Vehicle Physics Implementation - Issue Report
 
+## ✅ RESOLVED (2025-01-06)
+
+**All issues have been fixed!** The car now drives smoothly on the mountain track with proper physics.
+
+### Final Solution: Segmented Oriented Boxes
+
+Instead of using Trimesh collision (which caused instability), we implemented **oriented box collision**:
+
+1. **Track divided into 5m segments** (900 boxes total for 3.3km track)
+2. **Boxes oriented using quaternions** from track tangent/normal/binormal vectors
+3. **Key fix: Flipped normals** - Track normals pointed down (Y=-1), boxes need up (Y=+1)
+4. **Proper quaternion math** - Build rotation matrix from orthonormal basis then convert to quaternion
+
+### Working Configuration
+
+```typescript
+// Vehicle
+mass: 150kg
+angularDamping: 0.8
+centerOfMassOffset: (0, -0.5, 0)
+
+// Suspension
+stiffness: 100 (was 30 - too weak)
+restLength: 0.5m
+dampingCompression: 8.0
+dampingRelaxation: 5.0
+maxSuspensionForce: 10000N
+```
+
+### Critical Fixes
+
+1. ✅ **Initialize collision before raycasts** - `world.step(1/60)` before vehicle creation
+2. ✅ **Flip track normals** - `upNormal = sample.normal.clone().multiplyScalar(-1)`
+3. ✅ **Stronger suspension** - Stiffness 100 supports 150kg chassis properly
+4. ✅ **Oriented boxes** - Proper matrix math: `makeBasis(binormal, upNormal, tangent)`
+5. ✅ **Disable chassis collision** - Only wheels touch ground
+6. ✅ **10cm box overlap** - Prevents seam gaps between segments
+
+### Files
+
+- `src/cannonTest.ts` - Main vehicle setup
+- `src/trackCollision.ts` - Collision box generation with proper orientation
+- `README.md` - Updated with current system
+
+---
+
+## Historical Context: Original Issues (ARCHIVED)
+
+The following documents the debugging journey that led to the solution above. This implementation used Trimesh collision and had fundamental issues.
+
 ## Goal
 Implement proper vehicle physics using cannon-es RaycastVehicle to replace the existing arcade drift physics. The original arcade physics had direction issues where "when turn right to initiate drift it seems to slide towards the left slightly."
 
-## Current Status: ❌ NOT WORKING
+## Original Status: ❌ NOT WORKING (Trimesh approach)
 
 **Symptom:** Car is being thrown up in the air, tumbling, and not settling on the track properly.
 
