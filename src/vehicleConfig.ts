@@ -55,17 +55,17 @@ export interface VehicleConfig {
 }
 
 /**
- * Current prototype config (150kg test vehicle)
+ * Current prototype config (800kg test vehicle)
  */
 export const PROTO_CONFIG: VehicleConfig = {
   name: 'Prototype',
-  description: 'Current lightweight test vehicle (150kg)',
+  description: 'Prototype test vehicle (800kg)',
 
   chassis: {
     halfWidth: 1.0,
     halfHeight: 0.5,
     halfLength: 2.0,
-    mass: 150,
+    mass: 800,  // Increased from 150kg - was too light and bouncing
     centerOfMassOffset: new CANNON.Vec3(0, -0.5, 0),
   },
 
@@ -82,20 +82,20 @@ export const PROTO_CONFIG: VehicleConfig = {
   suspension: {
     stiffness: 100,
     restLength: 0.5,
-    dampingCompression: 8.0,
-    dampingRelaxation: 5.0,
-    maxForce: 10000,
+    dampingCompression: 12.0,  // Increased from 8.0 to reduce bouncing
+    dampingRelaxation: 8.0,    // Increased from 5.0 to reduce bouncing
+    maxForce: 50000,  // Increased from 10000 to support 800kg mass
     maxTravel: 0.5,
   },
 
   dynamics: {
-    angularDamping: 0.8,
-    linearDamping: 0.05,
+    angularDamping: 0.9,  // Increased from 0.8 to prevent flipping
+    linearDamping: 0.1,   // Increased from 0.05 to reduce bouncing
   },
 
   power: {
-    maxEngineForce: 150,
-    maxBrakeForce: 100,
+    maxEngineForce: 500,  // Increased from 150 for 800kg mass
+    maxBrakeForce: 300,   // Increased from 100 for 800kg mass
     maxSteerAngle: Math.PI / 8, // 22.5 degrees
   },
 

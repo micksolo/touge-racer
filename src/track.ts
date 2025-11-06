@@ -290,9 +290,9 @@ export function createMountainTrack(): TrackSurface {
   const controlPoints = getTrackControlPoints();
   const curve = new THREE.CatmullRomCurve3(controlPoints, false, 'centripetal', 0.12);
 
-  // Constant width of 24m - narrower to prevent overlaps on tight corners
-  // (You can adjust this value - smaller = tighter corners possible)
-  return new TrackSurface({ curve, width: 24, segments: 1800 });
+  // Touge-style mountain pass width: 7.5m (two narrow lanes)
+  // Reference: Real touge passes like Irohazaka (6-7m), Usui Pass (5-6m)
+  return new TrackSurface({ curve, width: 7.5, segments: 1800 });
 }
 
 function getRoadMaterial(): THREE.MeshStandardMaterial {

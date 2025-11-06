@@ -146,7 +146,7 @@ export function runCannonTest() {
   // Optional: Add guardrails
   const wallBodies = createTrackWalls(track, world, {
     height: 2,
-    offset: 13,  // Just beyond track edge
+    offset: 4,  // Just beyond track edge (7.5m width / 2 + 0.25m buffer)
     segmentLength: 10,
   });
 
@@ -169,12 +169,14 @@ export function runCannonTest() {
   // Center of mass from config
   chassisBody.centerOfMassOffset = vehicleConfig.chassis.centerOfMassOffset;
 
-  // Spawn car at track start, close to surface
+  // Spawn car at track start, very close to surface
   const startSample = track.samples[0];
   const startPos = startSample.position;
   const startTangent = startSample.tangent;
 
-  chassisBody.position.set(startPos.x, startPos.y + 2, startPos.z);
+  // Spawn just above surface: chassis height (0.5) + wheel radius (0.4) + suspension rest (0.5) + small buffer (0.2)
+  const spawnHeight = vehicleConfig.chassis.halfHeight + vehicleConfig.wheels.radius + vehicleConfig.suspension.restLength + 0.2;
+  chassisBody.position.set(startPos.x, startPos.y + spawnHeight, startPos.z);
 
   // Orient car along track tangent
   const startYaw = Math.atan2(startTangent.x, startTangent.z);
@@ -309,6 +311,8 @@ export function runCannonTest() {
 
   let lastTime = performance.now();
   let hasLanded = false;
+  let frameCount = 0;
+  let lastLogTime = 0;
 
   function animate() {
     requestAnimationFrame(animate);
@@ -389,6 +393,38 @@ export function runCannonTest() {
         console.log(`   Wheel ${i}: contact=${wheel.isInContact}, suspensionLen=${wheel.suspensionLength.toFixed(2)}m`);
       });
       hasLanded = true;
+    }
+
+    // Log telemetry to console every 60 frames (~1 second) when moving
+    frameCount++;
+    if (frameCount % 60 === 0 && telemetry.speed > 0.1) {
+      console.log(`\n📊 TELEMETRY (${currentTime.toFixed(0)}ms):`);
+      console.log(`   Speed: ${telemetry.speedKmh.toFixed(1)} km/h (${telemetry.speed.toFixed(2)} m/s)`);
+      console.log(`   Drift State: ${telemetry.driftState}`);
+      console.log(`   Avg Rear Slip: ${telemetry.avgRearSlipAngle.toFixed(2)}° (max: ${telemetry.maxSlipAngle.toFixed(2)}°)`);
+      console.log(`   Load: F${telemetry.loadDistribution.front.toFixed(1)}% R${telemetry.loadDistribution.rear.toFixed(1)}% | L${telemetry.loadDistribution.left.toFixed(1)}% R${telemetry.loadDistribution.right.toFixed(1)}%`);
+      console.log(`   Slip Angles: FL=${telemetry.wheels[0].slipAngle.toFixed(1)}° FR=${telemetry.wheels[1].slipAngle.toFixed(1)}° RL=${telemetry.wheels[2].slipAngle.toFixed(1)}° RR=${telemetry.wheels[3].slipAngle.toFixed(1)}°`);
+      console.log(`   Suspension: FL=${(telemetry.wheels[0].suspensionCompression * 100).toFixed(0)}% FR=${(telemetry.wheels[1].suspensionCompression * 100).toFixed(0)}% RL=${(telemetry.wheels[2].suspensionCompression * 100).toFixed(0)}% RR=${(telemetry.wheels[3].suspensionCompression * 100).toFixed(0)}%`);
+      console.log(`   Wheels on ground: ${wheelsOnGround}/4`);
+    }
+
+    // Log state changes (drift transitions)
+    if (lastLogTime > 0) {
+      const timeSinceLastLog = currentTime - lastLogTime;
+      // Log immediately on state changes (with debounce)
+      if (timeSinceLastLog > 500) {
+        // Check for state changes
+        const prevState = (window as any).__lastDriftState || 'GRIP';
+        if (telemetry.driftState !== prevState) {
+          console.log(`\n🔄 DRIFT STATE CHANGE: ${prevState} → ${telemetry.driftState}`);
+          console.log(`   Rear slip: ${telemetry.avgRearSlipAngle.toFixed(2)}° | Speed: ${telemetry.speedKmh.toFixed(1)} km/h`);
+          (window as any).__lastDriftState = telemetry.driftState;
+          lastLogTime = currentTime;
+        }
+      }
+    } else {
+      (window as any).__lastDriftState = telemetry.driftState;
+      lastLogTime = currentTime;
     }
 
     // Update HUD with telemetry
