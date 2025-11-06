@@ -59,23 +59,25 @@ export interface VehicleConfig {
  */
 export const PROTO_CONFIG: VehicleConfig = {
   name: 'Prototype',
-  description: 'Prototype test vehicle (800kg)',
+  description: 'Prototype test vehicle (800kg, compact dimensions)',
 
   chassis: {
-    halfWidth: 1.0,
-    halfHeight: 0.5,
-    halfLength: 2.0,
-    mass: 800,  // Increased from 150kg - was too light and bouncing
-    centerOfMassOffset: new CANNON.Vec3(0, -0.5, 0),
+    // Compact dimensions for narrow touge roads
+    halfWidth: 0.75,   // 1.5m total width (was 2.0m)
+    halfHeight: 0.5,   // 1.0m height
+    halfLength: 1.8,   // 3.6m length (was 4.0m)
+    mass: 800,
+    centerOfMassOffset: new CANNON.Vec3(0, -0.5, 0.9), // Very front-biased to keep front wheels down
   },
 
   wheels: {
-    radius: 0.4,
+    radius: 0.35,  // Smaller wheels (70cm diameter, was 80cm)
     positions: [
-      new CANNON.Vec3(-1, -0.5, 1.2),  // Front-left
-      new CANNON.Vec3(1, -0.5, 1.2),   // Front-right
-      new CANNON.Vec3(-1, -0.5, -1.2), // Rear-left
-      new CANNON.Vec3(1, -0.5, -1.2),  // Rear-right
+      // Narrower track width (1.3m vs 2.0m) and shorter wheelbase (2.2m vs 2.4m)
+      new CANNON.Vec3(-0.65, -0.5, 1.1),  // Front-left
+      new CANNON.Vec3(0.65, -0.5, 1.1),   // Front-right
+      new CANNON.Vec3(-0.65, -0.5, -1.1), // Rear-left
+      new CANNON.Vec3(0.65, -0.5, -1.1),  // Rear-right
     ],
   },
 
@@ -89,13 +91,13 @@ export const PROTO_CONFIG: VehicleConfig = {
   },
 
   dynamics: {
-    angularDamping: 0.9,  // Increased from 0.8 to prevent flipping
-    linearDamping: 0.1,   // Increased from 0.05 to reduce bouncing
+    angularDamping: 0.95,  // Very high to prevent wheelies and flipping
+    linearDamping: 0.1,    // Increased from 0.05 to reduce bouncing
   },
 
   power: {
-    maxEngineForce: 500,  // Increased from 150 for 800kg mass
-    maxBrakeForce: 300,   // Increased from 100 for 800kg mass
+    maxEngineForce: 1200,  // Further reduced to keep front wheels planted
+    maxBrakeForce: 800,    // Strong brakes for 800kg mass
     maxSteerAngle: Math.PI / 8, // 22.5 degrees
   },
 

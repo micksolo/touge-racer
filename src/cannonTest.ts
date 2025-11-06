@@ -72,16 +72,52 @@ export function runCannonTest() {
   // Add fog for atmosphere
   scene.fog = new THREE.Fog(0x87ceeb, 50, 500);
 
-  // Car visual (simple box, using config dimensions)
-  const carGeometry = new THREE.BoxGeometry(
+  // Car visual - 2-door coupe/sedan shape (SLAMMED stance)
+  const carGroup = new THREE.Group();
+
+  // Main body (lower part) - SLAMMED between wheels
+  const bodyGeometry = new THREE.BoxGeometry(
     vehicleConfig.chassis.halfWidth * 2,
-    vehicleConfig.chassis.halfHeight * 2,
+    vehicleConfig.chassis.halfHeight * 0.8, // Even thinner body
     vehicleConfig.chassis.halfLength * 2
   );
-  const carMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-  const carMesh = new THREE.Mesh(carGeometry, carMaterial);
-  carMesh.castShadow = true;
-  scene.add(carMesh);
+  const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+  const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  bodyMesh.position.y = -0.50; // SLAMMED - way lower, almost touching ground
+  bodyMesh.castShadow = true;
+  carGroup.add(bodyMesh);
+
+  // Cabin/windshield (upper part) - positioned toward rear like coupe
+  const cabinGeometry = new THREE.BoxGeometry(
+    vehicleConfig.chassis.halfWidth * 1.8, // Slightly narrower
+    vehicleConfig.chassis.halfHeight * 0.6, // Lower cabin
+    vehicleConfig.chassis.halfLength * 0.75  // Shorter cabin
+  );
+  const cabinMaterial = new THREE.MeshStandardMaterial({
+    color: 0x222222, // Dark windows/cabin
+    metalness: 0.3,
+    roughness: 0.7
+  });
+  const cabinMesh = new THREE.Mesh(cabinGeometry, cabinMaterial);
+  cabinMesh.position.y = -0.05; // Sits on slammed body
+  cabinMesh.position.z = -0.3; // Slightly toward rear (coupe style)
+  cabinMesh.castShadow = true;
+  carGroup.add(cabinMesh);
+
+  // Hood/front area (slight wedge shape with taper)
+  const hoodGeometry = new THREE.BoxGeometry(
+    vehicleConfig.chassis.halfWidth * 2,
+    vehicleConfig.chassis.halfHeight * 0.3,
+    vehicleConfig.chassis.halfLength * 0.6
+  );
+  const hoodMesh = new THREE.Mesh(hoodGeometry, bodyMaterial);
+  hoodMesh.position.y = -0.30; // Slammed hood
+  hoodMesh.position.z = 1.2; // Front of car
+  hoodMesh.castShadow = true;
+  carGroup.add(hoodMesh);
+
+  scene.add(carGroup);
+  const carMesh = carGroup; // Use group as main mesh for position updates
 
   // Wheel visuals (using config radius)
   const wheelGeometry = new THREE.CylinderGeometry(
@@ -146,7 +182,7 @@ export function runCannonTest() {
   // Optional: Add guardrails
   const wallBodies = createTrackWalls(track, world, {
     height: 2,
-    offset: 4,  // Just beyond track edge (7.5m width / 2 + 0.25m buffer)
+    offset: 6.5,  // Just beyond track edge (12m width / 2 + 0.5m buffer)
     segmentLength: 10,
   });
 
@@ -341,11 +377,13 @@ export function runCannonTest() {
     vehicle.applyEngineForce(engineForce, 3); // Rear-right
 
     if (input.brake) {
-      // Handbrake: 95% rear, 5% front to prevent forward flip
-      vehicle.setBrake(brakeForce * 0.05, 0); // Front-left
-      vehicle.setBrake(brakeForce * 0.05, 1); // Front-right
-      vehicle.setBrake(brakeForce * 1.95, 2); // Rear-left (most)
-      vehicle.setBrake(brakeForce * 1.95, 3); // Rear-right (most)
+      // Handbrake: Subtle rear-only braking for drift initiation
+      // Much lighter than full brake - just breaks rear traction
+      const handbrakeForce = brakeForce * 0.15; // Only 15% of full brake force
+      vehicle.setBrake(0, 0); // Front-left (no brake)
+      vehicle.setBrake(0, 1); // Front-right (no brake)
+      vehicle.setBrake(handbrakeForce, 2); // Rear-left (light)
+      vehicle.setBrake(handbrakeForce, 3); // Rear-right (light)
     } else {
       vehicle.setBrake(0, 0);
       vehicle.setBrake(0, 1);
@@ -434,9 +472,13 @@ export function runCannonTest() {
         <strong>CONTROLS:</strong><br>
         W/↑ - Forward | S/↓ - Reverse<br>
         A/← - Left | D/→ - Right<br>
-        Space - Handbrake<br>
-        T - Toggle telemetry detail<br>
-        V - Cycle vehicle config (restart needed)<br>
+        Space - Handbrake (subtle, drift initiation)<br>
+        T - Toggle telemetry<br>
+        <br>
+        <strong>DRIFT TECHNIQUES:</strong><br>
+        <em>Handbrake Drift:</em> Turn + Handbrake tap<br>
+        <em>Swedish Flick:</em> Steer AWAY → snap INTO corner<br>
+        <em>Power Over:</em> Accelerate hard in corner<br>
         <br>
         <strong>Config:</strong> ${vehicleConfig.name}
       `;

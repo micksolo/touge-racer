@@ -173,79 +173,87 @@ export class TrackSurface {
 
 function getDefaultTrackControlPoints(): THREE.Vector3[] {
   return [
-    // === START - Summit approach ===
+    // === START STRAIGHT - Acceleration zone ===
     new THREE.Vector3(0, 60, 0),
-    new THREE.Vector3(-20, 59, -60),
-    new THREE.Vector3(-35, 58, -120),
+    new THREE.Vector3(0, 59, -80),
+    new THREE.Vector3(0, 58, -150),
 
-    // === RIGHT SWEEPER (downhill entry) ===
-    new THREE.Vector3(-30, 56, -190),
-    new THREE.Vector3(0, 54, -260),
-    new THREE.Vector3(40, 52, -320),
-    new THREE.Vector3(75, 50, -370),
+    // === HAIRPIN 1 - TIGHT RIGHT (R=25m) ===
+    // Entry approach
+    new THREE.Vector3(5, 57, -180),
+    // Hairpin apex (very tight spacing!)
+    new THREE.Vector3(20, 56, -200),
+    new THREE.Vector3(30, 55, -205),
+    new THREE.Vector3(38, 54, -200),
+    // Exit
+    new THREE.Vector3(45, 53, -185),
 
-    // === CHICANE LEFT-RIGHT (technical section) ===
-    new THREE.Vector3(95, 48, -420),
-    new THREE.Vector3(85, 46, -480),
-    new THREE.Vector3(60, 44, -530),
-    new THREE.Vector3(70, 42, -590),
-    new THREE.Vector3(95, 40, -640),
+    // === MEDIUM RIGHT - Technical (R=50m) ===
+    new THREE.Vector3(55, 52, -150),
+    new THREE.Vector3(70, 51, -120),
+    new THREE.Vector3(80, 50, -90),
 
-    // === LONG LEFT SWEEPER (drift section 1) ===
-    new THREE.Vector3(100, 38, -710),
-    new THREE.Vector3(80, 36, -790),
-    new THREE.Vector3(40, 34, -870),
-    new THREE.Vector3(-10, 32, -940),
-    new THREE.Vector3(-60, 30, -990),
+    // === SHORT STRAIGHT - Transition ===
+    new THREE.Vector3(85, 49, -50),
+    new THREE.Vector3(85, 48, -10),
 
-    // === HAIRPIN RIGHT (180° switchback) ===
-    new THREE.Vector3(-95, 28, -1030),
-    new THREE.Vector3(-110, 26, -1080),
-    new THREE.Vector3(-100, 24, -1140),
-    new THREE.Vector3(-60, 22, -1180),
-    new THREE.Vector3(-10, 20, -1200),
+    // === HAIRPIN 2 - TIGHT LEFT (R=20m) ===
+    // Entry
+    new THREE.Vector3(82, 47, 15),
+    // Very tight apex
+    new THREE.Vector3(70, 46, 28),
+    new THREE.Vector3(55, 45, 32),
+    new THREE.Vector3(42, 44, 28),
+    // Exit
+    new THREE.Vector3(30, 43, 15),
 
-    // === FAST STRAIGHT (downhill blast) ===
-    new THREE.Vector3(45, 18, -1220),
-    new THREE.Vector3(90, 16, -1250),
+    // === S-CURVE - Medium left→right ===
+    new THREE.Vector3(20, 42, -10),
+    new THREE.Vector3(15, 41, -35),
+    new THREE.Vector3(20, 40, -60),
+    new THREE.Vector3(35, 39, -80),
 
-    // === DOUBLE APEX RIGHT (tricky corner) ===
-    new THREE.Vector3(120, 14, -1300),
-    new THREE.Vector3(130, 12, -1370),
-    new THREE.Vector3(125, 10, -1450),
+    // === FAST SWEEPER RIGHT - Long drift (R=80m) ===
+    new THREE.Vector3(55, 38, -100),
+    new THREE.Vector3(80, 37, -110),
+    new THREE.Vector3(105, 36, -115),
+    new THREE.Vector3(125, 35, -110),
 
-    // === S-CURVES (flowing transitions) ===
-    new THREE.Vector3(100, 8, -1520),
-    new THREE.Vector3(60, 6, -1580),
-    new THREE.Vector3(40, 4, -1650),
-    new THREE.Vector3(50, 2, -1720),
-    new THREE.Vector3(80, 0, -1780),
+    // === TIGHT CHICANE - Left→Right ===
+    new THREE.Vector3(140, 34, -95),
+    new THREE.Vector3(145, 33, -75),
+    new THREE.Vector3(145, 32, -50),
+    new THREE.Vector3(140, 31, -30),
 
-    // === LONG RIGHT SWEEPER (drift section 2) ===
-    new THREE.Vector3(115, -2, -1840),
-    new THREE.Vector3(140, -4, -1920),
-    new THREE.Vector3(150, -6, -2010),
-    new THREE.Vector3(145, -8, -2100),
-    new THREE.Vector3(120, -10, -2180),
+    // === HAIRPIN 3 - TIGHT RIGHT (R=18m) - Most technical ===
+    // Entry
+    new THREE.Vector3(135, 30, -5),
+    // Ultra tight apex
+    new THREE.Vector3(125, 29, 8),
+    new THREE.Vector3(112, 28, 12),
+    new THREE.Vector3(100, 27, 8),
+    // Exit
+    new THREE.Vector3(90, 26, -5),
 
-    // === HAIRPIN LEFT (180° switchback) ===
-    new THREE.Vector3(85, -12, -2240),
-    new THREE.Vector3(60, -14, -2290),
-    new THREE.Vector3(70, -16, -2350),
-    new THREE.Vector3(110, -18, -2390),
-    new THREE.Vector3(150, -20, -2410),
+    // === MEDIUM LEFT - Flowing (R=60m) ===
+    new THREE.Vector3(75, 25, -30),
+    new THREE.Vector3(55, 24, -50),
+    new THREE.Vector3(35, 23, -60),
 
-    // === DOWNHILL ESSES (final technical) ===
-    new THREE.Vector3(170, -22, -2460),
-    new THREE.Vector3(150, -24, -2530),
-    new THREE.Vector3(120, -26, -2600),
-    new THREE.Vector3(110, -28, -2680),
-    new THREE.Vector3(130, -30, -2750),
+    // === FINAL HAIRPIN - TIGHT LEFT (R=22m) ===
+    // Entry
+    new THREE.Vector3(18, 22, -65),
+    // Tight apex
+    new THREE.Vector3(8, 21, -75),
+    new THREE.Vector3(0, 20, -82),
+    new THREE.Vector3(-8, 19, -75),
+    // Exit to finish
+    new THREE.Vector3(-15, 18, -60),
 
-    // === FINAL STRAIGHT (finish) ===
-    new THREE.Vector3(150, -32, -2820),
-    new THREE.Vector3(160, -34, -2900),
-    new THREE.Vector3(165, -36, -2980),
+    // === FINISH STRAIGHT ===
+    new THREE.Vector3(-20, 17, -30),
+    new THREE.Vector3(-20, 16, 0),
+    new THREE.Vector3(-15, 15, 30),
   ];
 }
 
@@ -290,9 +298,9 @@ export function createMountainTrack(): TrackSurface {
   const controlPoints = getTrackControlPoints();
   const curve = new THREE.CatmullRomCurve3(controlPoints, false, 'centripetal', 0.12);
 
-  // Touge-style mountain pass width: 7.5m (two narrow lanes)
-  // Reference: Real touge passes like Irohazaka (6-7m), Usui Pass (5-6m)
-  return new TrackSurface({ curve, width: 7.5, segments: 1800 });
+  // Wider touge-style track: 12m (comfortable for drifting)
+  // Slightly wider than real touge for gameplay - allows full drift angles
+  return new TrackSurface({ curve, width: 12, segments: 1800 });
 }
 
 function getRoadMaterial(): THREE.MeshStandardMaterial {
