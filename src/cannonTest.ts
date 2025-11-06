@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createMountainTrack } from './track';
 import { createTrackCollisionBodies, createTrackMaterial, createTrackWalls } from './trackCollision';
+import { calculateVehicleTelemetry, formatTelemetryHUD, type VehicleTelemetry } from './telemetry';
+import { getVehicleConfig, describeVehicle, type VehicleConfigKey } from './vehicleConfig';
 
 // ============================================================================
 // CANNON-ES VEHICLE TEST - MOUNTAIN TRACK
@@ -10,6 +12,17 @@ import { createTrackCollisionBodies, createTrackMaterial, createTrackWalls } fro
 
 export function runCannonTest() {
   console.log('🧪 Starting cannon-es vehicle test on mountain track...');
+
+  // ============================================================================
+  // VEHICLE CONFIGURATION
+  // ============================================================================
+
+  let currentConfigKey: VehicleConfigKey = 'proto'; // Start with prototype
+  let vehicleConfig = getVehicleConfig(currentConfigKey);
+  let showDetailedTelemetry = true; // Toggle with 'T' key
+
+  console.log('🚗 Vehicle configuration:');
+  console.log(describeVehicle(vehicleConfig));
 
   // ============================================================================
   // THREE.JS SETUP
@@ -59,15 +72,24 @@ export function runCannonTest() {
   // Add fog for atmosphere
   scene.fog = new THREE.Fog(0x87ceeb, 50, 500);
 
-  // Car visual (simple box)
-  const carGeometry = new THREE.BoxGeometry(2, 1, 4);
+  // Car visual (simple box, using config dimensions)
+  const carGeometry = new THREE.BoxGeometry(
+    vehicleConfig.chassis.halfWidth * 2,
+    vehicleConfig.chassis.halfHeight * 2,
+    vehicleConfig.chassis.halfLength * 2
+  );
   const carMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
   const carMesh = new THREE.Mesh(carGeometry, carMaterial);
   carMesh.castShadow = true;
   scene.add(carMesh);
 
-  // Wheel visuals
-  const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+  // Wheel visuals (using config radius)
+  const wheelGeometry = new THREE.CylinderGeometry(
+    vehicleConfig.wheels.radius,
+    vehicleConfig.wheels.radius,
+    0.3,
+    16
+  );
   wheelGeometry.rotateZ(Math.PI / 2);
   const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
   const wheelMeshes: THREE.Mesh[] = [];
@@ -131,19 +153,21 @@ export function runCannonTest() {
   // Step the world once to initialize collision detection
   world.step(1/60);
 
-  // Car chassis body
-  const chassisShape = new CANNON.Box(new CANNON.Vec3(1, 0.5, 2));
+  // Car chassis body (using config)
+  const chassisShape = new CANNON.Box(new CANNON.Vec3(
+    vehicleConfig.chassis.halfWidth,
+    vehicleConfig.chassis.halfHeight,
+    vehicleConfig.chassis.halfLength
+  ));
   const chassisBody = new CANNON.Body({
-    mass: 150,
+    mass: vehicleConfig.chassis.mass,
     shape: chassisShape,
-    angularDamping: 0.8,  // High damping to prevent flipping
-    linearDamping: 0.05,  // Slight damping to reduce bouncing
-    // Temporarily enable collision to prevent falling through
-    // Once wheels make contact, they should support the car
+    angularDamping: vehicleConfig.dynamics.angularDamping,
+    linearDamping: vehicleConfig.dynamics.linearDamping,
   });
 
-  // Lower center of mass to prevent wheelies and flipping
-  chassisBody.centerOfMassOffset = new CANNON.Vec3(0, -0.5, 0);
+  // Center of mass from config
+  chassisBody.centerOfMassOffset = vehicleConfig.chassis.centerOfMassOffset;
 
   // Spawn car at track start, close to surface
   const startSample = track.samples[0];
@@ -169,33 +193,25 @@ export function runCannonTest() {
     indexForwardAxis: 2, // Z
   });
 
-  // Add wheels
+  // Add wheels (using config)
   const wheelOptions = {
-    radius: 0.4,
+    radius: vehicleConfig.wheels.radius,
     directionLocal: new CANNON.Vec3(0, -1, 0),
-    suspensionStiffness: 100,
-    suspensionRestLength: 0.5,  // Normal suspension length
-    frictionSlip: 5,
-    dampingRelaxation: 5.0,   // Increased damping to reduce bouncing/rocking
-    dampingCompression: 8.0,  // Increased damping to reduce bouncing/rocking
-    maxSuspensionForce: 10000,
-    rollInfluence: 0.01,
+    suspensionStiffness: vehicleConfig.suspension.stiffness,
+    suspensionRestLength: vehicleConfig.suspension.restLength,
+    frictionSlip: vehicleConfig.tire.frictionSlip,
+    dampingRelaxation: vehicleConfig.suspension.dampingRelaxation,
+    dampingCompression: vehicleConfig.suspension.dampingCompression,
+    maxSuspensionForce: vehicleConfig.suspension.maxForce,
+    rollInfluence: vehicleConfig.tire.rollInfluence,
     axleLocal: new CANNON.Vec3(1, 0, 0),
     chassisConnectionPointLocal: new CANNON.Vec3(0, 0, 0),
-    maxSuspensionTravel: 0.5,
+    maxSuspensionTravel: vehicleConfig.suspension.maxTravel,
     customSlidingRotationalSpeed: -30,
     useCustomSlidingRotationalSpeed: true,
   };
 
-  // Wheel positions: [left/right, down, front/back]
-  const wheelPositions = [
-    new CANNON.Vec3(-1, -0.5, 1.2),  // Front-left
-    new CANNON.Vec3(1, -0.5, 1.2),   // Front-right
-    new CANNON.Vec3(-1, -0.5, -1.2), // Rear-left
-    new CANNON.Vec3(1, -0.5, -1.2),  // Rear-right
-  ];
-
-  wheelPositions.forEach((position) => {
+  vehicleConfig.wheels.positions.forEach((position) => {
     vehicle.addWheel({
       ...wheelOptions,
       chassisConnectionPointLocal: position,
@@ -224,45 +240,61 @@ export function runCannonTest() {
   };
 
   window.addEventListener('keydown', (e) => {
-    switch (e.key) {
+    switch (e.key.toLowerCase()) {
       case 'w':
-      case 'ArrowUp':
+      case 'arrowup':
         input.forward = true;
         break;
       case 's':
-      case 'ArrowDown':
+      case 'arrowdown':
         input.backward = true;
         break;
       case 'a':
-      case 'ArrowLeft':
+      case 'arrowleft':
         input.left = true;
         break;
       case 'd':
-      case 'ArrowRight':
+      case 'arrowright':
         input.right = true;
         break;
       case ' ':
         input.brake = true;
         break;
+      case 't':
+        // Toggle telemetry detail
+        showDetailedTelemetry = !showDetailedTelemetry;
+        console.log(`📊 Telemetry detail: ${showDetailedTelemetry ? 'FULL' : 'COMPACT'}`);
+        break;
+      case 'v':
+        // Cycle vehicle config
+        const keys: VehicleConfigKey[] = ['proto', 'ae86', 's13'];
+        const currentIndex = keys.indexOf(currentConfigKey);
+        const nextIndex = (currentIndex + 1) % keys.length;
+        currentConfigKey = keys[nextIndex];
+        vehicleConfig = getVehicleConfig(currentConfigKey);
+        console.log('🚗 Switched vehicle config:');
+        console.log(describeVehicle(vehicleConfig));
+        console.log('⚠️  Note: Config change requires restart to take effect');
+        break;
     }
   });
 
   window.addEventListener('keyup', (e) => {
-    switch (e.key) {
+    switch (e.key.toLowerCase()) {
       case 'w':
-      case 'ArrowUp':
+      case 'arrowup':
         input.forward = false;
         break;
       case 's':
-      case 'ArrowDown':
+      case 'arrowdown':
         input.backward = false;
         break;
       case 'a':
-      case 'ArrowLeft':
+      case 'arrowleft':
         input.left = false;
         break;
       case 'd':
-      case 'ArrowRight':
+      case 'arrowright':
         input.right = false;
         break;
       case ' ':
@@ -285,10 +317,10 @@ export function runCannonTest() {
     const deltaTime = (currentTime - lastTime) / 1000;
     lastTime = currentTime;
 
-    // Apply vehicle controls
-    const maxSteerVal = Math.PI / 8; // 22.5 degrees
-    const maxForce = 150; // Reduced from 500 to prevent wheelies
-    const brakeForce = 100; // Increased for better braking
+    // Apply vehicle controls (using config)
+    const maxSteerVal = vehicleConfig.power.maxSteerAngle;
+    const maxForce = vehicleConfig.power.maxEngineForce;
+    const brakeForce = vehicleConfig.power.maxBrakeForce;
 
     let steerValue = 0;
     if (input.left) steerValue += maxSteerVal;
@@ -346,8 +378,11 @@ export function runCannonTest() {
       .add(carMesh.position);
     camera.lookAt(lookAtPoint);
 
+    // Calculate telemetry
+    const telemetry = calculateVehicleTelemetry(vehicle, chassisBody);
+
     // Track first landing
-    const wheelsOnGround = vehicle.wheelInfos.filter(w => w.isInContact).length;
+    const wheelsOnGround = telemetry.wheels.filter(w => w.isInContact).length;
     if (!hasLanded && wheelsOnGround > 0) {
       console.log(`🎯 LANDED! ${wheelsOnGround}/4 wheels on ground at Y=${chassisBody.position.y.toFixed(2)}`);
       vehicle.wheelInfos.forEach((wheel, i) => {
@@ -356,23 +391,28 @@ export function runCannonTest() {
       hasLanded = true;
     }
 
-    // Update HUD
-    const speed = chassisBody.velocity.length();
-    const speedKmh = (speed * 3.6).toFixed(1);
-
-    hudDiv.innerHTML = `
-      <strong>🏔️ Mountain Track Test</strong><br>
-      Speed: ${speedKmh} km/h<br>
-      Position: (${chassisBody.position.x.toFixed(1)}, ${chassisBody.position.y.toFixed(1)}, ${chassisBody.position.z.toFixed(1)})<br>
-      Wheels on ground: ${wheelsOnGround}/4<br>
-      <br>
-      <strong>Controls:</strong><br>
-      W/↑ - Forward<br>
-      S/↓ - Backward<br>
-      A/← - Left<br>
-      D/→ - Right<br>
-      Space - Brake
-    `;
+    // Update HUD with telemetry
+    if (showDetailedTelemetry) {
+      hudDiv.innerHTML = formatTelemetryHUD(telemetry, false) + `
+        <br>
+        <strong>CONTROLS:</strong><br>
+        W/↑ - Forward | S/↓ - Reverse<br>
+        A/← - Left | D/→ - Right<br>
+        Space - Handbrake<br>
+        T - Toggle telemetry detail<br>
+        V - Cycle vehicle config (restart needed)<br>
+        <br>
+        <strong>Config:</strong> ${vehicleConfig.name}
+      `;
+    } else {
+      hudDiv.innerHTML = `
+        <strong style="color: #00ffff;">🏔️ TOUGE RACER</strong><br>
+        ${formatTelemetryHUD(telemetry, true)}
+        <br>
+        <strong>Controls:</strong> WASD/Arrows, Space=Brake, T=Telemetry<br>
+        <strong>Config:</strong> ${vehicleConfig.name}
+      `;
+    }
 
     // Render
     renderer.render(scene, camera);
