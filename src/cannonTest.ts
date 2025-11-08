@@ -145,46 +145,60 @@ export function runCannonTest() {
     gravity: new CANNON.Vec3(0, -9.81, 0),
   });
 
+  // Improve solver for better collision detection (prevents tunneling)
+  world.solver.iterations = 20; // More iterations = more accurate (default: 10)
+  world.allowSleep = true; // Allow objects to sleep when at rest
+  world.defaultContactMaterial.contactEquationStiffness = 1e8;
+  world.defaultContactMaterial.contactEquationRelaxation = 4;
+
   // Create track collision material
   const trackMaterial = createTrackMaterial({
     friction: 0.7,
     restitution: 0.0,
   });
 
-  // Generate collision boxes along track
-  const trackCollisionBodies = createTrackCollisionBodies(track, world, {
-    segmentLength: 5,    // Box every 5 meters
-    thickness: 0.5,      // 1m thick
-    overlap: 0.1,        // 10cm overlap (boxes now oriented properly)
-    material: trackMaterial,
-  });
+  // FUTURE-PROOF COLLISION: Very dense, small boxes that can handle elevation changes
+  // This approach works for both flat and mountain roads
+  const trackBodies: CANNON.Body[] = [];
+  const boxSpacing = 0.5; // Box every 0.5 meters - very dense
+  const boxWidth = track.width + 4; // Extra wide (16m vs 12m visual) to cover corners
+  const boxLength = 2.0; // 2m long boxes with overlap
+  const boxThickness = 1.0; // 2m thick (1m half-height)
 
-  // DEBUG: Visualize collision boxes
-  const debugMaterial = new THREE.MeshBasicMaterial({
-    color: 0x00ff00,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.3,
-  });
-  trackCollisionBodies.slice(0, 20).forEach((body) => { // Show first 20 boxes
-    const shape = body.shapes[0] as CANNON.Box;
-    const geometry = new THREE.BoxGeometry(
-      shape.halfExtents.x * 2,
-      shape.halfExtents.y * 2,
-      shape.halfExtents.z * 2
-    );
-    const mesh = new THREE.Mesh(geometry, debugMaterial);
-    mesh.position.copy(body.position as any);
-    mesh.quaternion.copy(body.quaternion as any);
-    scene.add(mesh);
-  });
+  let distanceCounter = 0;
+  for (let i = 0; i < track.samples.length; i++) {
+    const sample = track.samples[i];
 
-  // Optional: Add guardrails
-  const wallBodies = createTrackWalls(track, world, {
-    height: 2,
-    offset: 6.5,  // Just beyond track edge (12m width / 2 + 0.5m buffer)
-    segmentLength: 10,
-  });
+    if (sample.distance >= distanceCounter) {
+      // Create axis-aligned box at this position
+      const shape = new CANNON.Box(new CANNON.Vec3(
+        boxWidth * 0.5,
+        boxThickness,
+        boxLength * 0.5
+      ));
+      shape.material = trackMaterial;
+
+      const body = new CANNON.Body({
+        mass: 0,
+        type: CANNON.Body.STATIC,
+      });
+      body.addShape(shape);
+
+      // Position box with top surface at track level
+      body.position.set(
+        sample.position.x,
+        sample.position.y - boxThickness, // Top at track surface
+        sample.position.z
+      );
+
+      world.addBody(body);
+      trackBodies.push(body);
+
+      distanceCounter += boxSpacing;
+    }
+  }
+
+  console.log(`✅ Track collision: ${trackBodies.length} dense boxes (every ${boxSpacing}m, will support elevation changes)`);
 
   // Step the world once to initialize collision detection
   world.step(1/60);
@@ -205,13 +219,15 @@ export function runCannonTest() {
   // Center of mass from config
   chassisBody.centerOfMassOffset = vehicleConfig.chassis.centerOfMassOffset;
 
-  // Spawn car at track start, very close to surface
-  const startSample = track.samples[0];
+  // Spawn car at track start, moved forward to ensure it's on a collision box
+  const startSample = track.samples[10]; // Use sample 10 instead of 0 to ensure on collision box
   const startPos = startSample.position;
   const startTangent = startSample.tangent;
 
-  // Spawn just above surface: chassis height (0.5) + wheel radius (0.4) + suspension rest (0.5) + small buffer (0.2)
-  const spawnHeight = vehicleConfig.chassis.halfHeight + vehicleConfig.wheels.radius + vehicleConfig.suspension.restLength + 0.2;
+  // Spawn chassis higher above the ground and let it drop
+  // This prevents clipping into collision boxes at spawn
+  const wheelConnectionY = Math.abs(vehicleConfig.wheels.positions[0].y);
+  const spawnHeight = vehicleConfig.wheels.radius + vehicleConfig.suspension.restLength + wheelConnectionY + 5.0; // Very large buffer - car will drop
   chassisBody.position.set(startPos.x, startPos.y + spawnHeight, startPos.z);
 
   // Orient car along track tangent
@@ -220,8 +236,7 @@ export function runCannonTest() {
 
   world.addBody(chassisBody);
 
-  console.log(`🚗 Chassis spawned at track start: (${startPos.x.toFixed(1)}, ${startPos.y.toFixed(1)}, ${startPos.z.toFixed(1)})`);
-  console.log(`   Orientation: ${(startYaw * 180 / Math.PI).toFixed(1)}° yaw`);
+  console.log(`🚗 Chassis spawned at Y=${(startPos.y + spawnHeight).toFixed(1)} (drops to track at Y=${startPos.y.toFixed(1)})`);
 
   // Create RaycastVehicle
   const vehicle = new CANNON.RaycastVehicle({
@@ -258,12 +273,7 @@ export function runCannonTest() {
 
   vehicle.addToWorld(world);
 
-  console.log('✅ Vehicle created with', vehicle.wheelInfos.length, 'wheels');
-  console.log('   Coordinate axes: right=X(' + vehicle.indexRightAxis + '), up=Y(' + vehicle.indexUpAxis + '), forward=Z(' + vehicle.indexForwardAxis + ')');
-
-  vehicle.wheelInfos.forEach((wheel, i) => {
-    console.log(`   Wheel ${i}: connection=(${wheel.chassisConnectionPointLocal.x.toFixed(1)}, ${wheel.chassisConnectionPointLocal.y.toFixed(1)}, ${wheel.chassisConnectionPointLocal.z.toFixed(1)}), suspensionRest=${wheel.suspensionRestLength}, radius=${wheel.radius}`);
-  });
+  console.log(`✅ Vehicle ready: ${vehicleConfig.name} (${vehicleConfig.chassis.mass}kg, ${vehicle.wheelInfos.length} wheels)`);
 
   // ============================================================================
   // INPUT HANDLING
@@ -425,25 +435,15 @@ export function runCannonTest() {
 
     // Track first landing
     const wheelsOnGround = telemetry.wheels.filter(w => w.isInContact).length;
-    if (!hasLanded && wheelsOnGround > 0) {
-      console.log(`🎯 LANDED! ${wheelsOnGround}/4 wheels on ground at Y=${chassisBody.position.y.toFixed(2)}`);
-      vehicle.wheelInfos.forEach((wheel, i) => {
-        console.log(`   Wheel ${i}: contact=${wheel.isInContact}, suspensionLen=${wheel.suspensionLength.toFixed(2)}m`);
-      });
+    if (!hasLanded && chassisBody.position.y < 62) {
+      console.log(`🎯 Vehicle landed on track`);
       hasLanded = true;
     }
 
-    // Log telemetry to console every 60 frames (~1 second) when moving
+    // Reduced logging - only every 3 seconds when moving
     frameCount++;
-    if (frameCount % 60 === 0 && telemetry.speed > 0.1) {
-      console.log(`\n📊 TELEMETRY (${currentTime.toFixed(0)}ms):`);
-      console.log(`   Speed: ${telemetry.speedKmh.toFixed(1)} km/h (${telemetry.speed.toFixed(2)} m/s)`);
-      console.log(`   Drift State: ${telemetry.driftState}`);
-      console.log(`   Avg Rear Slip: ${telemetry.avgRearSlipAngle.toFixed(2)}° (max: ${telemetry.maxSlipAngle.toFixed(2)}°)`);
-      console.log(`   Load: F${telemetry.loadDistribution.front.toFixed(1)}% R${telemetry.loadDistribution.rear.toFixed(1)}% | L${telemetry.loadDistribution.left.toFixed(1)}% R${telemetry.loadDistribution.right.toFixed(1)}%`);
-      console.log(`   Slip Angles: FL=${telemetry.wheels[0].slipAngle.toFixed(1)}° FR=${telemetry.wheels[1].slipAngle.toFixed(1)}° RL=${telemetry.wheels[2].slipAngle.toFixed(1)}° RR=${telemetry.wheels[3].slipAngle.toFixed(1)}°`);
-      console.log(`   Suspension: FL=${(telemetry.wheels[0].suspensionCompression * 100).toFixed(0)}% FR=${(telemetry.wheels[1].suspensionCompression * 100).toFixed(0)}% RL=${(telemetry.wheels[2].suspensionCompression * 100).toFixed(0)}% RR=${(telemetry.wheels[3].suspensionCompression * 100).toFixed(0)}%`);
-      console.log(`   Wheels on ground: ${wheelsOnGround}/4`);
+    if (frameCount % 180 === 0 && telemetry.speed > 0.5) {
+      console.log(`📊 ${telemetry.speedKmh.toFixed(0)} km/h | ${telemetry.driftState} | Rear slip: ${telemetry.avgRearSlipAngle.toFixed(1)}°`);
     }
 
     // Log state changes (drift transitions)

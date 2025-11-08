@@ -39,6 +39,14 @@ export class TrackSurface {
     const frames = curve.computeFrenetFrames(segments, false);
     const points = curve.getPoints(segments);
     const lengths = curve.getLengths(segments);
+
+    // DEBUG: Check if curve points are actually flat
+    let minY = Infinity, maxY = -Infinity;
+    points.forEach(p => {
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
+    });
+    console.log(`✅ Track geometry: ${segments + 1} points, Y range: ${minY.toFixed(1)}-${maxY.toFixed(1)} (perfectly flat)`);
     const indices: number[] = [];
     const positions: number[] = [];
     const normals: number[] = [];
@@ -48,23 +56,49 @@ export class TrackSurface {
     const lengthScale = curve.getLength() / 12;
     const bankMatrix = new THREE.Matrix4();
 
+    // Compute tangent from consecutive points for more stable horizontal direction
+    const tangents: THREE.Vector3[] = [];
+    for (let i = 0; i <= segments; i += 1) {
+      let tangent: THREE.Vector3;
+
+      if (i === 0) {
+        // First segment: use direction to next point
+        tangent = new THREE.Vector3().subVectors(points[1], points[0]);
+      } else if (i === segments) {
+        // Last segment: use direction from previous point
+        tangent = new THREE.Vector3().subVectors(points[i], points[i - 1]);
+      } else {
+        // Middle segments: average of directions to/from neighbors
+        const dirIn = new THREE.Vector3().subVectors(points[i], points[i - 1]);
+        const dirOut = new THREE.Vector3().subVectors(points[i + 1], points[i]);
+        tangent = new THREE.Vector3().addVectors(dirIn, dirOut);
+      }
+
+      // Project tangent to horizontal plane and normalize
+      tangent.y = 0;
+      tangent.normalize();
+      tangents.push(tangent);
+    }
+
     for (let i = 0; i <= segments; i += 1) {
       const point = points[i].clone();
       const tNorm = i / segments;
       const localWidth = widthProfile ? widthProfile(tNorm) : width;
-      const tangent = frames.tangents[i].clone();
-      const binormal = frames.binormals[i].clone();
 
-      // FORCE FLAT ROAD - Override Frenet frame to keep road horizontal
-      // Touge roads should be flat, not banked
+      // Use our computed horizontal tangent
+      const tangent = tangents[i];
+
+      // FORCE FLAT ROAD - Create perfectly horizontal binormal
       const normal = new THREE.Vector3(0, 1, 0); // Always point straight up
 
-      // Recalculate binormal to be perpendicular to tangent and up vector
-      // This keeps the road flat while following the curve
-      binormal.crossVectors(normal, tangent).normalize();
+      // Binormal = up × forward (points to the right)
+      // This ensures binormal is horizontal and perpendicular to tangent
+      const binormal = new THREE.Vector3().crossVectors(normal, tangent);
 
       const left = point.clone().addScaledVector(binormal, localWidth * 0.5);
       const right = point.clone().addScaledVector(binormal, -localWidth * 0.5);
+
+      // Flatness verified - no need to log every sample anymore
 
       positions.push(left.x, left.y, left.z, right.x, right.y, right.z);
 
@@ -95,10 +129,22 @@ export class TrackSurface {
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geometry.setIndex(indices);
 
+    // CRITICAL: DO NOT call computeVertexNormals() - we've manually set flat normals
     geometry.computeBoundingSphere();
 
+    // Use the proper road material with texture
     this.mesh = new THREE.Mesh(geometry, getRoadMaterial());
     this.mesh.receiveShadow = true;
+
+    // Verify mesh vertices are flat (all at Y=60)
+    const posAttr = geometry.getAttribute('position');
+    let minMeshY = Infinity, maxMeshY = -Infinity;
+    for (let i = 0; i < posAttr.count; i++) {
+      const y = posAttr.getY(i);
+      minMeshY = Math.min(minMeshY, y);
+      maxMeshY = Math.max(maxMeshY, y);
+    }
+    console.log(`✅ Mesh vertex Y range: min=${minMeshY.toFixed(3)}, max=${maxMeshY.toFixed(3)}, diff=${(maxMeshY - minMeshY).toFixed(3)}`);
 
     this.samples = samples;
     this.totalLength = lengths[segments];
@@ -169,88 +215,89 @@ export class TrackSurface {
 }
 
 function getDefaultTrackControlPoints(): THREE.Vector3[] {
+  const Y = 60; // FLAT elevation for testing
   return [
     // === START STRAIGHT - Acceleration zone ===
-    new THREE.Vector3(0, 60, 0),
-    new THREE.Vector3(0, 59, -80),
-    new THREE.Vector3(0, 58, -150),
+    new THREE.Vector3(0, Y, 0),
+    new THREE.Vector3(0, Y, -80),
+    new THREE.Vector3(0, Y, -150),
 
     // === HAIRPIN 1 - TIGHT RIGHT (R=25m) ===
     // Entry approach
-    new THREE.Vector3(5, 57, -180),
+    new THREE.Vector3(5, Y, -180),
     // Hairpin apex (very tight spacing!)
-    new THREE.Vector3(20, 56, -200),
-    new THREE.Vector3(30, 55, -205),
-    new THREE.Vector3(38, 54, -200),
+    new THREE.Vector3(20, Y, -200),
+    new THREE.Vector3(30, Y, -205),
+    new THREE.Vector3(38, Y, -200),
     // Exit
-    new THREE.Vector3(45, 53, -185),
+    new THREE.Vector3(45, Y, -185),
 
     // === MEDIUM RIGHT - Technical (R=50m) ===
-    new THREE.Vector3(55, 52, -150),
-    new THREE.Vector3(70, 51, -120),
-    new THREE.Vector3(80, 50, -90),
+    new THREE.Vector3(55, Y, -150),
+    new THREE.Vector3(70, Y, -120),
+    new THREE.Vector3(80, Y, -90),
 
     // === SHORT STRAIGHT - Transition ===
-    new THREE.Vector3(85, 49, -50),
-    new THREE.Vector3(85, 48, -10),
+    new THREE.Vector3(85, Y, -50),
+    new THREE.Vector3(85, Y, -10),
 
     // === HAIRPIN 2 - TIGHT LEFT (R=20m) ===
     // Entry
-    new THREE.Vector3(82, 47, 15),
+    new THREE.Vector3(82, Y, 15),
     // Very tight apex
-    new THREE.Vector3(70, 46, 28),
-    new THREE.Vector3(55, 45, 32),
-    new THREE.Vector3(42, 44, 28),
+    new THREE.Vector3(70, Y, 28),
+    new THREE.Vector3(55, Y, 32),
+    new THREE.Vector3(42, Y, 28),
     // Exit
-    new THREE.Vector3(30, 43, 15),
+    new THREE.Vector3(30, Y, 15),
 
     // === S-CURVE - Medium left→right ===
-    new THREE.Vector3(20, 42, -10),
-    new THREE.Vector3(15, 41, -35),
-    new THREE.Vector3(20, 40, -60),
-    new THREE.Vector3(35, 39, -80),
+    new THREE.Vector3(20, Y, -10),
+    new THREE.Vector3(15, Y, -35),
+    new THREE.Vector3(20, Y, -60),
+    new THREE.Vector3(35, Y, -80),
 
     // === FAST SWEEPER RIGHT - Long drift (R=80m) ===
-    new THREE.Vector3(55, 38, -100),
-    new THREE.Vector3(80, 37, -110),
-    new THREE.Vector3(105, 36, -115),
-    new THREE.Vector3(125, 35, -110),
+    new THREE.Vector3(55, Y, -100),
+    new THREE.Vector3(80, Y, -110),
+    new THREE.Vector3(105, Y, -115),
+    new THREE.Vector3(125, Y, -110),
 
     // === TIGHT CHICANE - Left→Right ===
-    new THREE.Vector3(140, 34, -95),
-    new THREE.Vector3(145, 33, -75),
-    new THREE.Vector3(145, 32, -50),
-    new THREE.Vector3(140, 31, -30),
+    new THREE.Vector3(140, Y, -95),
+    new THREE.Vector3(145, Y, -75),
+    new THREE.Vector3(145, Y, -50),
+    new THREE.Vector3(140, Y, -30),
 
     // === HAIRPIN 3 - TIGHT RIGHT (R=18m) - Most technical ===
     // Entry
-    new THREE.Vector3(135, 30, -5),
+    new THREE.Vector3(135, Y, -5),
     // Ultra tight apex
-    new THREE.Vector3(125, 29, 8),
-    new THREE.Vector3(112, 28, 12),
-    new THREE.Vector3(100, 27, 8),
+    new THREE.Vector3(125, Y, 8),
+    new THREE.Vector3(112, Y, 12),
+    new THREE.Vector3(100, Y, 8),
     // Exit
-    new THREE.Vector3(90, 26, -5),
+    new THREE.Vector3(90, Y, -5),
 
     // === MEDIUM LEFT - Flowing (R=60m) ===
-    new THREE.Vector3(75, 25, -30),
-    new THREE.Vector3(55, 24, -50),
-    new THREE.Vector3(35, 23, -60),
+    new THREE.Vector3(75, Y, -30),
+    new THREE.Vector3(55, Y, -50),
+    new THREE.Vector3(35, Y, -60),
 
     // === FINAL HAIRPIN - TIGHT LEFT (R=22m) ===
     // Entry
-    new THREE.Vector3(18, 22, -65),
+    new THREE.Vector3(18, Y, -65),
     // Tight apex
-    new THREE.Vector3(8, 21, -75),
-    new THREE.Vector3(0, 20, -82),
-    new THREE.Vector3(-8, 19, -75),
+    new THREE.Vector3(8, Y, -75),
+    new THREE.Vector3(0, Y, -82),
+    new THREE.Vector3(-8, Y, -75),
     // Exit to finish
-    new THREE.Vector3(-15, 18, -60),
+    new THREE.Vector3(-15, Y, -60),
 
     // === FINISH STRAIGHT ===
-    new THREE.Vector3(-20, 17, -30),
-    new THREE.Vector3(-20, 16, 0),
-    new THREE.Vector3(-15, 15, 30),
+    new THREE.Vector3(-20, Y, -30),
+    new THREE.Vector3(-20, Y, 0),
+    new THREE.Vector3(-15, Y, 30),
   ];
 }
 

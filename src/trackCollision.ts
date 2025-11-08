@@ -27,56 +27,70 @@ export function createTrackCollisionBodies(
   const samples = track.samples;
   const trackWidth = track.width;
 
-  // Calculate how many samples to skip between boxes
-  const avgSegmentLength = track.totalLength / (samples.length - 1);
-  const skipCount = Math.max(1, Math.floor(segmentLength / avgSegmentLength));
-
   console.log(`🏗️ Generating track collision:`);
   console.log(`   Total length: ${track.totalLength.toFixed(1)}m`);
   console.log(`   Samples: ${samples.length}`);
-  console.log(`   Segment length: ${segmentLength}m (skip ${skipCount} samples)`);
+  console.log(`   Segment length: ${segmentLength}m`);
   console.log(`   Box dimensions: ${trackWidth}m × ${thickness * 2}m × ${segmentLength + overlap}m`);
 
-  // Create a box for each segment along the track
-  for (let i = 0; i < samples.length - skipCount; i += skipCount) {
+  // Create a box every 'segmentLength' meters along the track
+  // Use actual distance along curve, not sample count
+  let lastBoxDistance = -segmentLength; // Start before 0 so first box is at 0
+
+  for (let i = 0; i < samples.length; i++) {
     const sample = samples[i];
 
-    // Create oriented collision box
-    const body = createOrientedBox(
-      sample,
-      trackWidth,
-      thickness,
-      segmentLength + overlap,  // Add overlap to prevent gaps
-      material
-    );
+    // Check if we've traveled far enough to place another box
+    if (sample.distance - lastBoxDistance >= segmentLength) {
+      // Create oriented collision box
+      const body = createOrientedBox(
+        sample,
+        trackWidth,
+        thickness,
+        segmentLength + overlap,  // Add overlap to prevent gaps
+        material
+      );
 
-    world.addBody(body);
-    bodies.push(body);
+      world.addBody(body);
+      bodies.push(body);
+
+      lastBoxDistance = sample.distance;
+    }
   }
 
   console.log(`✅ Created ${bodies.length} collision boxes`);
 
-  // Verify and log sample transforms
+  // Verify and log sample transforms (first 3 boxes)
   console.log(`🔍 Sample transforms and basis vectors (first 3):`);
-  for (let i = 0; i < Math.min(3, bodies.length); i++) {
-    const sample = samples[i * skipCount];
-    const pos = bodies[i].position;
+  let boxIndex = 0;
+  let lastCheckDistance = -segmentLength;
 
-    // Verify basis is orthonormal (using flipped normal like the boxes)
+  for (let i = 0; i < samples.length && boxIndex < Math.min(3, bodies.length); i++) {
+    const sample = samples[i];
+
+    if (sample.distance - lastCheckDistance >= segmentLength) {
+      const pos = bodies[boxIndex].position;
+
+    // Verify basis is orthonormal (normal now points up, no flip needed)
     const tangent = sample.tangent;
-    const upNormal = sample.normal.clone().multiplyScalar(-1);
+    const upNormal = sample.normal.clone();
     const binormal = sample.binormal;
 
     const dotTN = tangent.dot(upNormal);
     const dotTB = tangent.dot(binormal);
     const dotNB = upNormal.dot(binormal);
 
-    console.log(`   Box ${i}:`);
+    console.log(`   Box ${boxIndex}:`);
     console.log(`     Position: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
+    console.log(`     Distance: ${sample.distance.toFixed(1)}m`);
     console.log(`     Tangent:  (${tangent.x.toFixed(3)}, ${tangent.y.toFixed(3)}, ${tangent.z.toFixed(3)}) len=${tangent.length().toFixed(3)}`);
-    console.log(`     Up Normal: (${upNormal.x.toFixed(3)}, ${upNormal.y.toFixed(3)}, ${upNormal.z.toFixed(3)}) len=${upNormal.length().toFixed(3)} [FLIPPED]`);
+    console.log(`     Up Normal: (${upNormal.x.toFixed(3)}, ${upNormal.y.toFixed(3)}, ${upNormal.z.toFixed(3)}) len=${upNormal.length().toFixed(3)} [FLAT ROAD]`);
     console.log(`     Binormal: (${binormal.x.toFixed(3)}, ${binormal.y.toFixed(3)}, ${binormal.z.toFixed(3)}) len=${binormal.length().toFixed(3)}`);
     console.log(`     Orthogonality: T·N=${dotTN.toFixed(3)}, T·B=${dotTB.toFixed(3)}, N·B=${dotNB.toFixed(3)} (should be ~0)`);
+
+      lastCheckDistance = sample.distance;
+      boxIndex++;
+    }
   }
 
   return bodies;
@@ -94,10 +108,12 @@ function createOrientedBox(
   material?: CANNON.Material
 ): CANNON.Body {
   // Half-extents for the box
+  // Make boxes wider than visual track to ensure coverage in corners
+  const widthMargin = 1.5; // Add 3m total width (1.5m per side)
   const halfExtents = new CANNON.Vec3(
-    width * 0.5,   // Half track width (left-right)
-    thickness,     // Half thickness (up-down)
-    length * 0.5   // Half segment length (forward-back)
+    (width + widthMargin) * 0.5,   // Half track width + margin (left-right)
+    thickness,                      // Half thickness (up-down)
+    length * 0.5                    // Half segment length (forward-back)
   );
 
   const shape = new CANNON.Box(halfExtents);
@@ -106,26 +122,26 @@ function createOrientedBox(
     shape.material = material;
   }
 
-  // Build orientation quaternion from track vectors
-  // NOTE: Track normal points DOWN, so we flip it to point UP for collision boxes
-  const upNormal = sample.normal.clone().multiplyScalar(-1);
-
-  // Convention: right = binormal (X), up = flipped normal (Y), forward = tangent (Z)
-  const orientation = buildOrientationQuaternion(
-    sample.tangent,
-    upNormal,
-    sample.binormal
+  // IMPORTANT: Use axis-aligned boxes (no rotation) for reliable raycast collision
+  // RaycastVehicle works best with flat, unrotated collision boxes
+  // Position the box so its TOP surface is at the track surface
+  // Force all boxes to same Y level for perfectly smooth surface
+  const trackSurfaceY = 60.0; // Hardcoded to match track geometry
+  const boxPosition = new THREE.Vector3(
+    sample.position.x,
+    trackSurfaceY - thickness, // All boxes at exact same Y for smooth surface
+    sample.position.z
   );
 
   const body = new CANNON.Body({
     mass: 0,  // Static
     shape,
     position: new CANNON.Vec3(
-      sample.position.x,
-      sample.position.y,
-      sample.position.z
+      boxPosition.x,
+      boxPosition.y,
+      boxPosition.z
     ),
-    quaternion: orientation,
+    // No quaternion - keep boxes axis-aligned for raycast compatibility
     type: CANNON.Body.STATIC,
   });
 
@@ -200,21 +216,25 @@ export function createTrackWalls(
   const bodies: CANNON.Body[] = [];
   const samples = track.samples;
 
-  const avgSegmentLength = track.totalLength / (samples.length - 1);
-  const skipCount = Math.max(1, Math.floor(segmentLength / avgSegmentLength));
+  // Place walls every 'segmentLength' meters using actual distance
+  let lastWallDistance = -segmentLength;
 
-  for (let i = 0; i < samples.length - skipCount; i += skipCount) {
+  for (let i = 0; i < samples.length; i++) {
     const sample = samples[i];
 
-    // Left wall
-    const leftWall = createWallBox(sample, offset, height, segmentLength, true);
-    world.addBody(leftWall);
-    bodies.push(leftWall);
+    if (sample.distance - lastWallDistance >= segmentLength) {
+      // Left wall
+      const leftWall = createWallBox(sample, offset, height, segmentLength, true);
+      world.addBody(leftWall);
+      bodies.push(leftWall);
 
-    // Right wall
-    const rightWall = createWallBox(sample, offset, height, segmentLength, false);
-    world.addBody(rightWall);
-    bodies.push(rightWall);
+      // Right wall
+      const rightWall = createWallBox(sample, offset, height, segmentLength, false);
+      world.addBody(rightWall);
+      bodies.push(rightWall);
+
+      lastWallDistance = sample.distance;
+    }
   }
 
   console.log(`🚧 Created ${bodies.length} guardrail segments`);
@@ -237,8 +257,8 @@ function createWallBox(
 
   const shape = new CANNON.Box(halfExtents);
 
-  // Flip normal to point up (same as track boxes)
-  const upNormal = sample.normal.clone().multiplyScalar(-1);
+  // Use normal directly (already points up due to flat road enforcement)
+  const upNormal = sample.normal.clone();
   const orientation = buildOrientationQuaternion(
     sample.tangent,
     upNormal,
