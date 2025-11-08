@@ -157,37 +157,72 @@ export function runCannonTest() {
     restitution: 0.0,
   });
 
-  // FUTURE-PROOF COLLISION: Very dense, small boxes that can handle elevation changes
-  // This approach works for both flat and mountain roads
+  // Create guardrail material - VERY bouncy and near-zero friction for bounce-off behavior
+  const guardrailMaterial = new CANNON.Material({
+    friction: 0.01,    // Near-zero friction - car slides and bounces off smoothly
+    restitution: 0.9,  // Very high bounce - gentle deflection, no sticking
+  });
+
+  // Contact material between car and guardrails - override default behavior
+  const carGuardrailContact = new CANNON.ContactMaterial(
+    world.defaultMaterial,
+    guardrailMaterial,
+    {
+      friction: 0.01,     // Near-zero friction for smooth bounce
+      restitution: 0.9,   // High restitution for bounce-off
+      contactEquationStiffness: 1e7,    // Stiffer for instant bounce
+      contactEquationRelaxation: 3,     // Less relaxation for quicker response
+    }
+  );
+  world.addContactMaterial(carGuardrailContact);
+
+  // ORIENTED BOX COLLISION - Industry Standard Approach
+  // Boxes follow track geometry using tangent/normal/binormal vectors
   const trackBodies: CANNON.Body[] = [];
-  const boxSpacing = 0.5; // Box every 0.5 meters - very dense
-  const boxWidth = track.width + 4; // Extra wide (16m vs 12m visual) to cover corners
-  const boxLength = 2.0; // 2m long boxes with overlap
-  const boxThickness = 1.0; // 2m thick (1m half-height)
+  const boxSpacing = 5.0; // Box every 5 meters - reasonable spacing
+  const boxWidth = track.width + 4; // Track width + 4m margin (16m total)
+  const boxLength = 10.0; // 10m long boxes for overlap
+  const boxThickness = 0.5; // 1m thick collision volume
 
   let distanceCounter = 0;
   for (let i = 0; i < track.samples.length; i++) {
     const sample = track.samples[i];
 
     if (sample.distance >= distanceCounter) {
-      // Create axis-aligned box at this position
+      // Create oriented box following track geometry
+      // Box local axes: X = across track (binormal), Y = up (normal), Z = along track (tangent)
       const shape = new CANNON.Box(new CANNON.Vec3(
-        boxWidth * 0.5,
-        boxThickness,
-        boxLength * 0.5
+        boxWidth * 0.5,      // Half-width across track
+        boxThickness,        // Half-height (vertical)
+        boxLength * 0.5      // Half-length along track
       ));
       shape.material = trackMaterial;
+
+      // Build orientation quaternion from track basis vectors
+      const rotationMatrix = new THREE.Matrix4().makeBasis(
+        sample.binormal,  // X: right/left across track
+        sample.normal,    // Y: up
+        sample.tangent    // Z: forward along track
+      );
+      const threeQuat = new THREE.Quaternion().setFromRotationMatrix(rotationMatrix);
+      const orientation = new CANNON.Quaternion(
+        threeQuat.x,
+        threeQuat.y,
+        threeQuat.z,
+        threeQuat.w
+      );
 
       const body = new CANNON.Body({
         mass: 0,
         type: CANNON.Body.STATIC,
+        quaternion: orientation,
       });
       body.addShape(shape);
 
-      // Position box with top surface at track level
+      // Position box centered on track centerline, with top at track surface
       body.position.set(
         sample.position.x,
-        sample.position.y - boxThickness, // Top at track surface
+        sample.position.y - boxThickness, // Top surface at track level
         sample.position.z
       );
 
@@ -198,7 +233,145 @@ export function runCannonTest() {
     }
   }
 
-  console.log(`✅ Track collision: ${trackBodies.length} dense boxes (every ${boxSpacing}m, will support elevation changes)`);
+  console.log(`✅ Track collision: ${trackBodies.length} oriented boxes (every ${boxSpacing}m, ${boxWidth}m wide, ${boxLength}m long)`);
+  console.log(`   Following track curve using tangent/normal/binormal geometry`);;
+
+  // Add SMART guardrails - curvature-based placement
+  // On tight corners: only place outside rail to avoid blocking inside line
+  // On straights: place both rails for full protection
+  const guardrailBodies: CANNON.Body[] = [];
+  const wallHeight = 1.0; // 1m tall barriers
+  const wallSpacing = 5; // Wall every 5 meters - tighter spacing for better coverage
+  const curvatureThreshold = 0.15; // Only skip inside on VERY tight hairpins (higher = more selective)
+
+  let wallDistanceCounter = 0;
+
+  for (let i = 0; i < track.samples.length - 1; i++) {
+    const sample = track.samples[i];
+
+    if (sample.distance >= wallDistanceCounter) {
+      // Calculate curvature: angle between current and next tangent
+      // Look ahead 30 samples to detect corners earlier
+      const lookAhead = Math.min(30, track.samples.length - 1 - i);
+      const nextIndex = i + lookAhead;
+      const nextSample = track.samples[nextIndex];
+      const tangentDot = sample.tangent.dot(nextSample.tangent);
+      const curvatureAngle = Math.acos(Math.max(-1, Math.min(1, tangentDot)));
+
+      // Determine turn direction: sign of (t_i × t_{i+1}) · up
+      const tangentCross = new THREE.Vector3().crossVectors(sample.tangent, nextSample.tangent);
+      const turnDirection = Math.sign(tangentCross.dot(sample.normal)); // +1 = left turn, -1 = right turn
+
+      // Create orientation from track geometry
+      const rotationMatrix = new THREE.Matrix4().makeBasis(
+        sample.binormal,     // X: across track
+        sample.normal,       // Y: up
+        sample.tangent       // Z: along track
+      );
+      const threeQuat = new THREE.Quaternion().setFromRotationMatrix(rotationMatrix);
+      const orientation = new CANNON.Quaternion(
+        threeQuat.x,
+        threeQuat.y,
+        threeQuat.z,
+        threeQuat.w
+      );
+
+      const isTightCorner = curvatureAngle > curvatureThreshold;
+
+      // Keep guardrails close to track edge - visual guardrails will be rendered later
+      const wallOffset = (track.width * 0.5) + 0.8; // 0.8m beyond track edge
+
+      // Dynamic segment length based on curvature - MUCH shorter on corners to reduce swing
+      const wallSegmentLength = isTightCorner ? 4 : 8; // 4m on tight corners, 8m on straights
+
+      // ALWAYS place both guardrails for full coverage
+      // Shorter segments on corners prevent them from swinging into the track
+
+      // Left guardrail (binormal direction = +1)
+      const leftShape = new CANNON.Box(new CANNON.Vec3(0.15, wallHeight * 0.5, wallSegmentLength * 0.5));
+      leftShape.material = guardrailMaterial;
+      const leftBody = new CANNON.Body({
+        mass: 0,
+        type: CANNON.Body.STATIC,
+        quaternion: orientation,
+      });
+      leftBody.addShape(leftShape);
+      leftBody.position.set(
+        sample.position.x + sample.binormal.x * wallOffset,
+        sample.position.y + wallHeight * 0.5,
+        sample.position.z + sample.binormal.z * wallOffset
+      );
+      world.addBody(leftBody);
+      guardrailBodies.push(leftBody);
+
+      // Right guardrail (binormal direction = -1)
+      const rightShape = new CANNON.Box(new CANNON.Vec3(0.15, wallHeight * 0.5, wallSegmentLength * 0.5));
+      rightShape.material = guardrailMaterial;
+      const rightBody = new CANNON.Body({
+        mass: 0,
+        type: CANNON.Body.STATIC,
+        quaternion: orientation,
+      });
+      rightBody.addShape(rightShape);
+      rightBody.position.set(
+        sample.position.x - sample.binormal.x * wallOffset,
+        sample.position.y + wallHeight * 0.5,
+        sample.position.z - sample.binormal.z * wallOffset
+      );
+      world.addBody(rightBody);
+      guardrailBodies.push(rightBody);
+
+      // Debug logging for first few and tight corners
+      if (i < 5 || (isTightCorner && Math.random() < 0.3)) {
+        const turnType = turnDirection > 0 ? 'LEFT' : turnDirection < 0 ? 'RIGHT' : 'STRAIGHT';
+        const segLen = isTightCorner ? '4m' : '8m';
+        console.log(`  Segment ${i}: curvature ${curvatureAngle.toFixed(3)} rad → ${turnType} turn, segment length ${segLen}`);
+      }
+
+      wallDistanceCounter += wallSpacing;
+    }
+  }
+
+  console.log(`✅ Guardrails: ${guardrailBodies.length} segments (every ${wallSpacing}m, dynamic length 4-8m, 0.8m offset)`);
+
+  // ============================================================================
+  // DEBUG VISUALIZATION - Collision Boxes
+  // ============================================================================
+
+  const collisionBoxHelpers: THREE.LineSegments[] = [];
+
+  function createCollisionBoxHelpers() {
+    // Clear existing helpers
+    collisionBoxHelpers.forEach(helper => scene.remove(helper));
+    collisionBoxHelpers.length = 0;
+
+    // Create helpers for all collision bodies
+    [...trackBodies, ...guardrailBodies].forEach((body) => {
+      if (body.shapes[0] instanceof CANNON.Box) {
+        const shape = body.shapes[0] as CANNON.Box;
+        const geometry = new THREE.BoxGeometry(
+          shape.halfExtents.x * 2,
+          shape.halfExtents.y * 2,
+          shape.halfExtents.z * 2
+        );
+        const edges = new THREE.EdgesGeometry(geometry);
+        const material = new THREE.LineBasicMaterial({
+          color: body === trackBodies[0] || trackBodies.includes(body) ? 0x00ff00 : 0xff0000,
+          linewidth: 1
+        });
+        const helper = new THREE.LineSegments(edges, material);
+        helper.position.copy(body.position as any);
+        helper.quaternion.copy(body.quaternion as any);
+        helper.visible = false; // Hidden by default
+        scene.add(helper);
+        collisionBoxHelpers.push(helper);
+      }
+    });
+
+    console.log(`🎨 Created ${collisionBoxHelpers.length} collision box helpers (Press B to toggle)`);
+  }
+
+  createCollisionBoxHelpers();
 
   // Step the world once to initialize collision detection
   world.step(1/60);
@@ -276,6 +449,61 @@ export function runCannonTest() {
   console.log(`✅ Vehicle ready: ${vehicleConfig.name} (${vehicleConfig.chassis.mass}kg, ${vehicle.wheelInfos.length} wheels)`);
 
   // ============================================================================
+  // DEBUG CAMERA CONTROLS
+  // ============================================================================
+
+  let debugCameraMode = false; // Toggle between vehicle cam and free cam
+  let showCollisionBoxes = false; // Toggle collision box visualization
+
+  // Free camera state
+  const freeCameraPosition = new THREE.Vector3(0, 100, 100);
+  const freeCameraRotation = { yaw: 0, pitch: 0 }; // Euler angles
+  const freeCameraVelocity = new THREE.Vector3();
+  const freeCameraInput = {
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
+    up: false,
+    down: false,
+    sprint: false,
+  };
+
+  // Mouse look for free camera
+  let isMouseLookActive = false;
+  let lastMouseX = 0;
+  let lastMouseY = 0;
+
+  // FPS-style mouse look with pointer lock
+  const canvas = renderer.domElement;
+
+  canvas.addEventListener('click', () => {
+    if (debugCameraMode) {
+      canvas.requestPointerLock();
+    }
+  });
+
+  document.addEventListener('pointerlockchange', () => {
+    isMouseLookActive = document.pointerLockElement === canvas;
+    if (!isMouseLookActive && debugCameraMode) {
+      // User pressed ESC - exit debug camera mode
+      debugCameraMode = false;
+      console.log('🎥 Switched to vehicle camera');
+    }
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (isMouseLookActive && debugCameraMode) {
+      const deltaX = e.movementX || 0;
+      const deltaY = e.movementY || 0;
+
+      freeCameraRotation.yaw -= deltaX * 0.002; // Horizontal rotation (move right = rotate right)
+      freeCameraRotation.pitch -= deltaY * 0.002; // Vertical rotation (move down = look down)
+      freeCameraRotation.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, freeCameraRotation.pitch));
+    }
+  });
+
+  // ============================================================================
   // INPUT HANDLING
   // ============================================================================
 
@@ -288,25 +516,64 @@ export function runCannonTest() {
   };
 
   window.addEventListener('keydown', (e) => {
+    // Debug camera controls (active when in debug mode)
+    if (debugCameraMode) {
+      switch (e.key.toLowerCase()) {
+        case 'w': freeCameraInput.forward = true; break;
+        case 's': freeCameraInput.backward = true; break;
+        case 'a': freeCameraInput.left = true; break;
+        case 'd': freeCameraInput.right = true; break;
+        case 'q': freeCameraInput.down = true; break;
+        case 'e': freeCameraInput.up = true; break;
+        case 'shift': freeCameraInput.sprint = true; break;
+      }
+    }
+
+    // Vehicle controls and global toggles
     switch (e.key.toLowerCase()) {
       case 'w':
       case 'arrowup':
-        input.forward = true;
+        if (!debugCameraMode) input.forward = true;
         break;
       case 's':
       case 'arrowdown':
-        input.backward = true;
+        if (!debugCameraMode) input.backward = true;
         break;
       case 'a':
       case 'arrowleft':
-        input.left = true;
+        if (!debugCameraMode) input.left = true;
         break;
       case 'd':
       case 'arrowright':
-        input.right = true;
+        if (!debugCameraMode) input.right = true;
         break;
       case ' ':
-        input.brake = true;
+        if (!debugCameraMode) input.brake = true;
+        break;
+      case 'c':
+        // Toggle debug camera mode
+        debugCameraMode = !debugCameraMode;
+        if (debugCameraMode) {
+          // Start free camera at current vehicle position
+          freeCameraPosition.copy(camera.position);
+          // Auto-request pointer lock for FPS-style mouse look
+          canvas.requestPointerLock();
+          console.log(`📷 DEBUG CAMERA: ON - Mouse to look, WASD to move, QE for up/down, Shift to sprint, ESC to exit`);
+        } else {
+          // Exit pointer lock when leaving debug mode
+          if (document.pointerLockElement === canvas) {
+            document.exitPointerLock();
+          }
+          console.log(`📷 DEBUG CAMERA: OFF - Back to vehicle camera`);
+        }
+        break;
+      case 'b':
+        // Toggle collision box visualization
+        showCollisionBoxes = !showCollisionBoxes;
+        collisionBoxHelpers.forEach(helper => {
+          helper.visible = showCollisionBoxes;
+        });
+        console.log(`📦 COLLISION BOXES: ${showCollisionBoxes ? 'VISIBLE' : 'HIDDEN'}`);
         break;
       case 't':
         // Toggle telemetry detail
@@ -328,6 +595,20 @@ export function runCannonTest() {
   });
 
   window.addEventListener('keyup', (e) => {
+    // Debug camera keyup
+    if (debugCameraMode) {
+      switch (e.key.toLowerCase()) {
+        case 'w': freeCameraInput.forward = false; break;
+        case 's': freeCameraInput.backward = false; break;
+        case 'a': freeCameraInput.left = false; break;
+        case 'd': freeCameraInput.right = false; break;
+        case 'q': freeCameraInput.down = false; break;
+        case 'e': freeCameraInput.up = false; break;
+        case 'shift': freeCameraInput.sprint = false; break;
+      }
+    }
+
+    // Vehicle controls keyup
     switch (e.key.toLowerCase()) {
       case 'w':
       case 'arrowup':
@@ -417,18 +698,61 @@ export function runCannonTest() {
       wheelMeshes[i].quaternion.copy(transform.quaternion as any);
     });
 
-    // Camera follows car from behind in local space
-    const cameraOffset = new THREE.Vector3(0, 5, -15); // Behind car (local space)
-    const cameraPosition = cameraOffset.clone()
-      .applyQuaternion(carMesh.quaternion) // Rotate offset by car's orientation
-      .add(carMesh.position); // Add car position
-    camera.position.lerp(cameraPosition, 0.1);
+    // Camera control
+    if (debugCameraMode) {
+      // FREE CAMERA MODE - WASD + mouse look
+      const moveSpeed = freeCameraInput.sprint ? 100 : 30; // m/s
+      const damping = 0.9;
 
-    // Look at a point slightly ahead of the car
-    const lookAtPoint = new THREE.Vector3(0, 1, 3) // Slightly ahead
-      .applyQuaternion(carMesh.quaternion)
-      .add(carMesh.position);
-    camera.lookAt(lookAtPoint);
+      // Calculate forward and right vectors from yaw/pitch (FPS-style)
+      // Extract the camera's actual look direction
+      const forward = new THREE.Vector3(0, 0, -1);
+      forward.applyEuler(new THREE.Euler(freeCameraRotation.pitch, freeCameraRotation.yaw, 0, 'YXZ'));
+
+      // Right is perpendicular to forward on the horizontal plane
+      const right = new THREE.Vector3(1, 0, 0);
+      right.applyEuler(new THREE.Euler(0, freeCameraRotation.yaw, 0, 'YXZ'));
+      const up = new THREE.Vector3(0, 1, 0);
+
+      // Apply input to velocity
+      const inputVelocity = new THREE.Vector3();
+      if (freeCameraInput.forward) inputVelocity.add(forward);
+      if (freeCameraInput.backward) inputVelocity.sub(forward);
+      if (freeCameraInput.left) inputVelocity.sub(right);
+      if (freeCameraInput.right) inputVelocity.add(right);
+      if (freeCameraInput.up) inputVelocity.add(up);
+      if (freeCameraInput.down) inputVelocity.sub(up);
+
+      if (inputVelocity.length() > 0) {
+        inputVelocity.normalize().multiplyScalar(moveSpeed);
+      }
+
+      // Apply velocity with damping
+      freeCameraVelocity.multiplyScalar(damping);
+      freeCameraVelocity.add(inputVelocity.multiplyScalar(1 - damping));
+
+      // Update position
+      freeCameraPosition.add(freeCameraVelocity.clone().multiplyScalar(deltaTime));
+
+      // Apply to camera
+      camera.position.copy(freeCameraPosition);
+      camera.quaternion.setFromEuler(
+        new THREE.Euler(freeCameraRotation.pitch, freeCameraRotation.yaw, 0, 'YXZ')
+      );
+    } else {
+      // VEHICLE CAMERA MODE - Follow car from behind
+      const cameraOffset = new THREE.Vector3(0, 5, -15); // Behind car (local space)
+      const cameraPosition = cameraOffset.clone()
+        .applyQuaternion(carMesh.quaternion) // Rotate offset by car's orientation
+        .add(carMesh.position); // Add car position
+      camera.position.lerp(cameraPosition, 0.1);
+
+      // Look at a point slightly ahead of the car
+      const lookAtPoint = new THREE.Vector3(0, 1, 3) // Slightly ahead
+        .applyQuaternion(carMesh.quaternion)
+        .add(carMesh.position);
+      camera.lookAt(lookAtPoint);
+    }
 
     // Calculate telemetry
     const telemetry = calculateVehicleTelemetry(vehicle, chassisBody);
@@ -466,14 +790,33 @@ export function runCannonTest() {
     }
 
     // Update HUD with telemetry
-    if (showDetailedTelemetry) {
+    if (debugCameraMode) {
+      // DEBUG CAMERA MODE HUD
+      hudDiv.innerHTML = `
+        <strong style="color: #ff00ff;">📷 DEBUG CAMERA MODE</strong><br>
+        <br>
+        <strong>CONTROLS:</strong><br>
+        <span style="color: #ffff00;">Click+Drag</span> - Look around<br>
+        <span style="color: #ffff00;">WASD</span> - Move<br>
+        <span style="color: #ffff00;">Q/E</span> - Down/Up<br>
+        <span style="color: #ffff00;">Shift</span> - Sprint (fast movement)<br>
+        <span style="color: #ffff00;">C</span> - Exit debug camera<br>
+        <span style="color: #ffff00;">B</span> - Toggle collision boxes (${showCollisionBoxes ? 'ON' : 'OFF'})<br>
+        <br>
+        <strong>Position:</strong> (${freeCameraPosition.x.toFixed(1)}, ${freeCameraPosition.y.toFixed(1)}, ${freeCameraPosition.z.toFixed(1)})<br>
+        <strong>Rotation:</strong> Yaw ${(freeCameraRotation.yaw * 180 / Math.PI).toFixed(0)}° Pitch ${(freeCameraRotation.pitch * 180 / Math.PI).toFixed(0)}°<br>
+        <br>
+        <strong style="color: #00ff00;">Green boxes:</strong> Track collision<br>
+        <strong style="color: #ff0000;">Red boxes:</strong> Guardrails<br>
+      `;
+    } else if (showDetailedTelemetry) {
       hudDiv.innerHTML = formatTelemetryHUD(telemetry, false) + `
         <br>
         <strong>CONTROLS:</strong><br>
         W/↑ - Forward | S/↓ - Reverse<br>
         A/← - Left | D/→ - Right<br>
         Space - Handbrake (subtle, drift initiation)<br>
-        T - Toggle telemetry<br>
+        T - Toggle telemetry | C - Debug camera | B - Collision boxes<br>
         <br>
         <strong>DRIFT TECHNIQUES:</strong><br>
         <em>Handbrake Drift:</em> Turn + Handbrake tap<br>
@@ -487,7 +830,7 @@ export function runCannonTest() {
         <strong style="color: #00ffff;">🏔️ TOUGE RACER</strong><br>
         ${formatTelemetryHUD(telemetry, true)}
         <br>
-        <strong>Controls:</strong> WASD/Arrows, Space=Brake, T=Telemetry<br>
+        <strong>Controls:</strong> WASD/Arrows, Space=Brake, T=Telemetry, C=Debug Cam<br>
         <strong>Config:</strong> ${vehicleConfig.name}
       `;
     }

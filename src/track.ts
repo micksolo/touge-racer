@@ -217,87 +217,54 @@ export class TrackSurface {
 function getDefaultTrackControlPoints(): THREE.Vector3[] {
   const Y = 60; // FLAT elevation for testing
   return [
-    // === START STRAIGHT - Acceleration zone ===
+    // === SIMPLE LINEAR TOUGE - NO CROSSOVERS ===
+    // Point-to-point descent: progresses steadily in +X direction
+
+    // === START ===
     new THREE.Vector3(0, Y, 0),
-    new THREE.Vector3(0, Y, -80),
-    new THREE.Vector3(0, Y, -150),
+    new THREE.Vector3(0, Y, -20),
 
-    // === HAIRPIN 1 - TIGHT RIGHT (R=25m) ===
-    // Entry approach
-    new THREE.Vector3(5, Y, -180),
-    // Hairpin apex (very tight spacing!)
-    new THREE.Vector3(20, Y, -200),
-    new THREE.Vector3(30, Y, -205),
-    new THREE.Vector3(38, Y, -200),
-    // Exit
-    new THREE.Vector3(45, Y, -185),
-
-    // === MEDIUM RIGHT - Technical (R=50m) ===
-    new THREE.Vector3(55, Y, -150),
-    new THREE.Vector3(70, Y, -120),
-    new THREE.Vector3(80, Y, -90),
-
-    // === SHORT STRAIGHT - Transition ===
-    new THREE.Vector3(85, Y, -50),
-    new THREE.Vector3(85, Y, -10),
-
-    // === HAIRPIN 2 - TIGHT LEFT (R=20m) ===
-    // Entry
-    new THREE.Vector3(82, Y, 15),
-    // Very tight apex
-    new THREE.Vector3(70, Y, 28),
-    new THREE.Vector3(55, Y, 32),
-    new THREE.Vector3(42, Y, 28),
-    // Exit
-    new THREE.Vector3(30, Y, 15),
-
-    // === S-CURVE - Medium left→right ===
-    new THREE.Vector3(20, Y, -10),
-    new THREE.Vector3(15, Y, -35),
-    new THREE.Vector3(20, Y, -60),
-    new THREE.Vector3(35, Y, -80),
-
-    // === FAST SWEEPER RIGHT - Long drift (R=80m) ===
-    new THREE.Vector3(55, Y, -100),
-    new THREE.Vector3(80, Y, -110),
-    new THREE.Vector3(105, Y, -115),
-    new THREE.Vector3(125, Y, -110),
-
-    // === TIGHT CHICANE - Left→Right ===
-    new THREE.Vector3(140, Y, -95),
-    new THREE.Vector3(145, Y, -75),
-    new THREE.Vector3(145, Y, -50),
-    new THREE.Vector3(140, Y, -30),
-
-    // === HAIRPIN 3 - TIGHT RIGHT (R=18m) - Most technical ===
-    // Entry
-    new THREE.Vector3(135, Y, -5),
-    // Ultra tight apex
-    new THREE.Vector3(125, Y, 8),
-    new THREE.Vector3(112, Y, 12),
-    new THREE.Vector3(100, Y, 8),
-    // Exit
-    new THREE.Vector3(90, Y, -5),
-
-    // === MEDIUM LEFT - Flowing (R=60m) ===
-    new THREE.Vector3(75, Y, -30),
-    new THREE.Vector3(55, Y, -50),
-    new THREE.Vector3(35, Y, -60),
-
-    // === FINAL HAIRPIN - TIGHT LEFT (R=22m) ===
-    // Entry
+    // === HAIRPIN 1 - Right ===
+    new THREE.Vector3(5, Y, -45),
     new THREE.Vector3(18, Y, -65),
-    // Tight apex
-    new THREE.Vector3(8, Y, -75),
-    new THREE.Vector3(0, Y, -82),
-    new THREE.Vector3(-8, Y, -75),
-    // Exit to finish
-    new THREE.Vector3(-15, Y, -60),
+    new THREE.Vector3(35, Y, -75),
+    new THREE.Vector3(50, Y, -72),
+    new THREE.Vector3(62, Y, -60),
 
-    // === FINISH STRAIGHT ===
-    new THREE.Vector3(-20, Y, -30),
-    new THREE.Vector3(-20, Y, 0),
-    new THREE.Vector3(-15, Y, 30),
+    // === STRAIGHT + S-CURVE ===
+    new THREE.Vector3(75, Y, -40),
+    new THREE.Vector3(85, Y, -15),
+    new THREE.Vector3(90, Y, 10),
+    new THREE.Vector3(92, Y, 35),
+
+    // === HAIRPIN 2 - Left ===
+    new THREE.Vector3(95, Y, 55),
+    new THREE.Vector3(105, Y, 72),
+    new THREE.Vector3(122, Y, 82),
+    new THREE.Vector3(140, Y, 80),
+    new THREE.Vector3(155, Y, 68),
+
+    // === MEDIUM SWEEPER ===
+    new THREE.Vector3(170, Y, 50),
+    new THREE.Vector3(185, Y, 28),
+    new THREE.Vector3(195, Y, 5),
+
+    // === HAIRPIN 3 - Right ===
+    new THREE.Vector3(200, Y, -20),
+    new THREE.Vector3(208, Y, -42),
+    new THREE.Vector3(222, Y, -58),
+    new THREE.Vector3(240, Y, -62),
+    new THREE.Vector3(258, Y, -55),
+
+    // === FINAL SWEEPERS ===
+    new THREE.Vector3(275, Y, -38),
+    new THREE.Vector3(290, Y, -18),
+    new THREE.Vector3(305, Y, 5),
+
+    // === FINISH ===
+    new THREE.Vector3(320, Y, 25),
+    new THREE.Vector3(335, Y, 40),
+    new THREE.Vector3(350, Y, 50),
   ];
 }
 

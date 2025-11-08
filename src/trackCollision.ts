@@ -17,9 +17,9 @@ export function createTrackCollisionBodies(
   }
 ): CANNON.Body[] {
   const {
-    segmentLength = 5,      // Sample every 5 meters
+    segmentLength = 3,      // Sample every 3 meters (tighter spacing for curves)
     thickness = 0.5,        // 1m thick collision volume
-    overlap = 0.15,         // 15cm overlap to prevent gaps
+    overlap = 3,            // 3m overlap between boxes - ensures no gaps on tight corners
     material,
   } = options || {};
 
@@ -122,26 +122,26 @@ function createOrientedBox(
     shape.material = material;
   }
 
-  // IMPORTANT: Use axis-aligned boxes (no rotation) for reliable raycast collision
-  // RaycastVehicle works best with flat, unrotated collision boxes
-  // Position the box so its TOP surface is at the track surface
-  // Force all boxes to same Y level for perfectly smooth surface
-  const trackSurfaceY = 60.0; // Hardcoded to match track geometry
-  const boxPosition = new THREE.Vector3(
-    sample.position.x,
-    trackSurfaceY - thickness, // All boxes at exact same Y for smooth surface
-    sample.position.z
+  // ORIENTED BOXES - Follow track geometry to prevent gaps on curves
+  // Build orientation quaternion from track basis vectors
+  const orientation = buildOrientationQuaternion(
+    sample.tangent,
+    sample.normal,
+    sample.binormal
   );
+
+  // Position at track surface (centered on the track sample point)
+  const boxPosition = sample.position.clone();
 
   const body = new CANNON.Body({
     mass: 0,  // Static
     shape,
     position: new CANNON.Vec3(
       boxPosition.x,
-      boxPosition.y,
+      boxPosition.y - thickness, // Lower by thickness so top surface is at track level
       boxPosition.z
     ),
-    // No quaternion - keep boxes axis-aligned for raycast compatibility
+    quaternion: orientation, // Apply rotation to follow track curve
     type: CANNON.Body.STATIC,
   });
 
