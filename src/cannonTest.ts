@@ -157,21 +157,18 @@ export function runCannonTest() {
     restitution: 0.0,
   });
 
-  // Create guardrail material - VERY bouncy and near-zero friction for bounce-off behavior
-  const guardrailMaterial = new CANNON.Material({
-    friction: 0.01,    // Near-zero friction - car slides and bounces off smoothly
-    restitution: 0.9,  // Very high bounce - gentle deflection, no sticking
-  });
+  // Create guardrail material - ARCADE STYLE: Disabled collision response
+  const guardrailMaterial = new CANNON.Material('guardrail');
 
-  // Contact material between car and guardrails - override default behavior
+  // Contact material with ZERO collision response - we handle it manually
   const carGuardrailContact = new CANNON.ContactMaterial(
     world.defaultMaterial,
     guardrailMaterial,
     {
-      friction: 0.01,     // Near-zero friction for smooth bounce
-      restitution: 0.9,   // High restitution for bounce-off
-      contactEquationStiffness: 1e7,    // Stiffer for instant bounce
-      contactEquationRelaxation: 3,     // Less relaxation for quicker response
+      friction: 0,
+      restitution: 0,
+      contactEquationStiffness: 0,      // NO collision response
+      contactEquationRelaxation: 100,   // Extremely relaxed
     }
   );
   world.addContactMaterial(carGuardrailContact);
@@ -180,7 +177,9 @@ export function runCannonTest() {
   // Boxes follow track geometry using tangent/normal/binormal vectors
   const trackBodies: CANNON.Body[] = [];
   const boxSpacing = 5.0; // Box every 5 meters - reasonable spacing
-  const boxWidth = track.width + 4; // Track width + 4m margin (16m total)
+  const boxWidth = track.width + 1.5; // Track width (12m) + 1.5m margin = 13.5m
+                                       // Gives 0.75m physical surface past visual edge on each side
+                                       // Prevents wheels from falling through while arcade system bounces car
   const boxLength = 10.0; // 10m long boxes for overlap
   const boxThickness = 0.5; // 1m thick collision volume
 
@@ -236,28 +235,29 @@ export function runCannonTest() {
   console.log(`✅ Track collision: ${trackBodies.length} oriented boxes (every ${boxSpacing}m, ${boxWidth}m wide, ${boxLength}m long)`);
   console.log(`   Following track curve using tangent/normal/binormal geometry`);;
 
-  // Add SMART guardrails - curvature-based placement
-  // On tight corners: only place outside rail to avoid blocking inside line
-  // On straights: place both rails for full protection
+  // Add SMART guardrails - curvature-adaptive placement
+  // Tighter spacing on corners to prevent gaps on outside of curve
   const guardrailBodies: CANNON.Body[] = [];
   const wallHeight = 1.0; // 1m tall barriers
-  const wallSpacing = 5; // Wall every 5 meters - tighter spacing for better coverage
-  const curvatureThreshold = 0.15; // Only skip inside on VERY tight hairpins (higher = more selective)
+  const curvatureThreshold = 0.15; // Detect tight corners
 
   let wallDistanceCounter = 0;
 
   for (let i = 0; i < track.samples.length - 1; i++) {
     const sample = track.samples[i];
 
-    if (sample.distance >= wallDistanceCounter) {
-      // Calculate curvature: angle between current and next tangent
-      // Look ahead 30 samples to detect corners earlier
-      const lookAhead = Math.min(30, track.samples.length - 1 - i);
-      const nextIndex = i + lookAhead;
-      const nextSample = track.samples[nextIndex];
-      const tangentDot = sample.tangent.dot(nextSample.tangent);
-      const curvatureAngle = Math.acos(Math.max(-1, Math.min(1, tangentDot)));
+    // Pre-calculate curvature to determine spacing
+    const lookAhead = Math.min(30, track.samples.length - 1 - i);
+    const nextIndex = i + lookAhead;
+    const nextSample = track.samples[nextIndex];
+    const tangentDot = sample.tangent.dot(nextSample.tangent);
+    const curvatureAngle = Math.acos(Math.max(-1, Math.min(1, tangentDot)));
+    const isTightCorner = curvatureAngle > curvatureThreshold;
 
+    // Adaptive spacing: much tighter on corners to prevent gaps on outside
+    const wallSpacing = isTightCorner ? 3 : 6; // 3m on tight corners, 6m on straights
+
+    if (sample.distance >= wallDistanceCounter) {
       // Determine turn direction: sign of (t_i × t_{i+1}) · up
       const tangentCross = new THREE.Vector3().crossVectors(sample.tangent, nextSample.tangent);
       const turnDirection = Math.sign(tangentCross.dot(sample.normal)); // +1 = left turn, -1 = right turn
@@ -276,13 +276,12 @@ export function runCannonTest() {
         threeQuat.w
       );
 
-      const isTightCorner = curvatureAngle > curvatureThreshold;
-
-      // Keep guardrails close to track edge - visual guardrails will be rendered later
-      const wallOffset = (track.width * 0.5) + 0.8; // 0.8m beyond track edge
+      // Place guardrails flush with track edge (no gap)
+      // Guardrail box width is 0.3m (0.15m half-extent), so center at edge + 0.15m
+      const wallOffset = (track.width * 0.5) + 0.15; // Flush against track edge
 
       // Dynamic segment length based on curvature - MUCH shorter on corners to reduce swing
-      const wallSegmentLength = isTightCorner ? 4 : 8; // 4m on tight corners, 8m on straights
+      const wallSegmentLength = isTightCorner ? 5 : 8; // 5m on tight corners, 8m on straights
 
       // ALWAYS place both guardrails for full coverage
       // Shorter segments on corners prevent them from swinging into the track
@@ -294,6 +293,7 @@ export function runCannonTest() {
         mass: 0,
         type: CANNON.Body.STATIC,
         quaternion: orientation,
+        collisionResponse: false, // ARCADE: No physical collision - distance-based only
       });
       leftBody.addShape(leftShape);
       leftBody.position.set(
@@ -311,6 +311,7 @@ export function runCannonTest() {
         mass: 0,
         type: CANNON.Body.STATIC,
         quaternion: orientation,
+        collisionResponse: false, // ARCADE: No physical collision - distance-based only
       });
       rightBody.addShape(rightShape);
       rightBody.position.set(
@@ -324,15 +325,16 @@ export function runCannonTest() {
       // Debug logging for first few and tight corners
       if (i < 5 || (isTightCorner && Math.random() < 0.3)) {
         const turnType = turnDirection > 0 ? 'LEFT' : turnDirection < 0 ? 'RIGHT' : 'STRAIGHT';
-        const segLen = isTightCorner ? '4m' : '8m';
-        console.log(`  Segment ${i}: curvature ${curvatureAngle.toFixed(3)} rad → ${turnType} turn, segment length ${segLen}`);
+        const spacing = wallSpacing;
+        const segLen = wallSegmentLength;
+        console.log(`  Segment ${i}: curvature ${curvatureAngle.toFixed(3)} rad → ${turnType} turn, spacing ${spacing}m, length ${segLen}m`);
       }
 
       wallDistanceCounter += wallSpacing;
     }
   }
 
-  console.log(`✅ Guardrails: ${guardrailBodies.length} segments (every ${wallSpacing}m, dynamic length 4-8m, 0.8m offset)`);
+  console.log(`✅ Guardrails: ${guardrailBodies.length} segments (adaptive: 3m/5m on corners, 6m/8m on straights, flush with track edge)`);
 
   // ============================================================================
   // DEBUG VISUALIZATION - Collision Boxes
@@ -447,6 +449,114 @@ export function runCannonTest() {
   vehicle.addToWorld(world);
 
   console.log(`✅ Vehicle ready: ${vehicleConfig.name} (${vehicleConfig.chassis.mass}kg, ${vehicle.wheelInfos.length} wheels)`);
+
+  // ============================================================================
+  // ARCADE GUARDRAIL PHYSICS - Distance-Based Wall Assist
+  // ============================================================================
+  // Uses track projection to detect wall proximity and apply arcade-style graze
+  // Runs in preStep so corrections happen BEFORE physics solver
+
+  const trackEdge = track.width * 0.5; // 6m from center = track edge
+  const wallZone = trackEdge - 0.2; // Trigger bounce 20cm BEFORE edge (prevents clipping through guardrail)
+
+  world.addEventListener('preStep', () => {
+    // Project chassis position onto track to get lateral offset
+    const carPos = new THREE.Vector3(
+      chassisBody.position.x,
+      chassisBody.position.y,
+      chassisBody.position.z
+    );
+
+    const projection = track.projectPoint(carPos);
+    const sample = projection.sample;
+
+    // ========================================================================
+    // ARCADE STABILIZATION: Keep car upright (prevent rolling/pitching)
+    // ========================================================================
+
+    // Get car's current orientation
+    const carQuat = chassisBody.quaternion;
+    const upVector = new CANNON.Vec3(0, 1, 0);
+    const carUp = new CANNON.Vec3();
+    carQuat.vmult(upVector, carUp); // Car's local "up" in world space
+
+    // Calculate how tilted the car is
+    const tiltDot = carUp.dot(upVector); // 1.0 = upright, 0.0 = on side, -1.0 = upside down
+
+    if (tiltDot < 0.95) {
+      // Car is tilted - apply strong corrective torque
+      // Calculate axis to rotate around (perpendicular to both up vectors)
+      const correctionAxis = new CANNON.Vec3();
+      carUp.cross(upVector, correctionAxis);
+      correctionAxis.normalize();
+
+      // Strong stabilization torque (like a gyroscope)
+      const stabilizationStrength = 50.0; // Very strong for arcade feel
+      const correctionTorque = correctionAxis.scale(stabilizationStrength);
+
+      // Apply torque to right the car
+      chassisBody.torque.vadd(correctionTorque, chassisBody.torque);
+
+      // Dampen angular velocity when tilted (prevents oscillation)
+      chassisBody.angularVelocity.scale(0.5, chassisBody.angularVelocity);
+    }
+
+    // Auto-correct if car is severely tilted or upside down
+    if (tiltDot < 0.3) {
+      // Car is on its side or upside down - snap it upright
+      const targetQuat = new CANNON.Quaternion();
+      targetQuat.setFromEuler(0, Math.atan2(sample.tangent.x, sample.tangent.z), 0);
+      chassisBody.quaternion.copy(targetQuat);
+      chassisBody.angularVelocity.set(0, 0, 0);
+    }
+
+    // ========================================================================
+    // WALL COLLISION: Arcade graze behavior
+    // ========================================================================
+
+    // Calculate lateral offset from track centerline
+    const toCarVec = new THREE.Vector3().subVectors(carPos, sample.position);
+    const lateralOffset = toCarVec.dot(sample.binormal);
+
+    // Check if car is outside track bounds
+    const absOffset = Math.abs(lateralOffset);
+    if (absOffset > wallZone) {
+      // INSTANT SNAP BACK: Teleport car to safe zone (away from guardrail)
+      const wallSign = Math.sign(lateralOffset);
+      const safeZone = trackEdge - 0.8; // 5.2m from center - well within track bounds
+      const safePos = sample.position.clone().add(
+        sample.binormal.clone().multiplyScalar(wallSign * safeZone)
+      );
+
+      // Snap position to safe zone (keep original Y height)
+      chassisBody.position.set(safePos.x, carPos.y, safePos.z);
+
+      // ARCADE VELOCITY: Gentler bounce to prevent flipping
+      const velocity = chassisBody.velocity;
+      const vel3 = new THREE.Vector3(velocity.x, velocity.y, velocity.z);
+      const wallNormal = sample.binormal.clone().multiplyScalar(wallSign);
+
+      // Get velocity along track (tangent direction)
+      const trackForward = sample.tangent;
+      const forwardSpeed = vel3.dot(trackForward);
+      const forwardVel = trackForward.clone().multiplyScalar(forwardSpeed * 0.95); // Keep 95% forward speed
+
+      // ARCADE RESPONSE: Gentler bounce to prevent flipping
+      const bounceSpeed = 4.0; // Reduced from 8.0 m/s - gentler deflection
+      const bounceVel = wallNormal.clone().multiplyScalar(-bounceSpeed);
+
+      // New velocity: forward motion + gentle bounce
+      const newVel = forwardVel.add(bounceVel);
+
+      // Keep some Y velocity for jumps/drops
+      newVel.y = velocity.y * 0.5;
+
+      velocity.set(newVel.x, newVel.y, newVel.z);
+
+      // Dampen angular velocity (stabilization will handle the rest)
+      chassisBody.angularVelocity.scale(0.2, chassisBody.angularVelocity);
+    }
+  });
 
   // ============================================================================
   // DEBUG CAMERA CONTROLS
