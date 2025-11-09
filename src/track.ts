@@ -46,7 +46,7 @@ export class TrackSurface {
       minY = Math.min(minY, p.y);
       maxY = Math.max(maxY, p.y);
     });
-    console.log(`✅ Track geometry: ${segments + 1} points, Y range: ${minY.toFixed(1)}-${maxY.toFixed(1)} (perfectly flat)`);
+    console.log(`✅ Track geometry: ${segments + 1} points, Y range: ${minY.toFixed(1)}-${maxY.toFixed(1)} (elevation: ${(maxY - minY).toFixed(1)}m)`);
     const indices: number[] = [];
     const positions: number[] = [];
     const normals: number[] = [];
@@ -56,49 +56,18 @@ export class TrackSurface {
     const lengthScale = curve.getLength() / 12;
     const bankMatrix = new THREE.Matrix4();
 
-    // Compute tangent from consecutive points for more stable horizontal direction
-    const tangents: THREE.Vector3[] = [];
-    for (let i = 0; i <= segments; i += 1) {
-      let tangent: THREE.Vector3;
-
-      if (i === 0) {
-        // First segment: use direction to next point
-        tangent = new THREE.Vector3().subVectors(points[1], points[0]);
-      } else if (i === segments) {
-        // Last segment: use direction from previous point
-        tangent = new THREE.Vector3().subVectors(points[i], points[i - 1]);
-      } else {
-        // Middle segments: average of directions to/from neighbors
-        const dirIn = new THREE.Vector3().subVectors(points[i], points[i - 1]);
-        const dirOut = new THREE.Vector3().subVectors(points[i + 1], points[i]);
-        tangent = new THREE.Vector3().addVectors(dirIn, dirOut);
-      }
-
-      // Project tangent to horizontal plane and normalize
-      tangent.y = 0;
-      tangent.normalize();
-      tangents.push(tangent);
-    }
-
     for (let i = 0; i <= segments; i += 1) {
       const point = points[i].clone();
       const tNorm = i / segments;
       const localWidth = widthProfile ? widthProfile(tNorm) : width;
 
-      // Use our computed horizontal tangent
-      const tangent = tangents[i];
-
-      // FORCE FLAT ROAD - Create perfectly horizontal binormal
-      const normal = new THREE.Vector3(0, 1, 0); // Always point straight up
-
-      // Binormal = up × forward (points to the right)
-      // This ensures binormal is horizontal and perpendicular to tangent
-      const binormal = new THREE.Vector3().crossVectors(normal, tangent);
+      // Use Frenet frame for natural elevation following
+      const tangent = frames.tangents[i].clone().normalize();
+      const normal = frames.normals[i].clone().normalize();
+      const binormal = frames.binormals[i].clone().normalize();
 
       const left = point.clone().addScaledVector(binormal, localWidth * 0.5);
       const right = point.clone().addScaledVector(binormal, -localWidth * 0.5);
-
-      // Flatness verified - no need to log every sample anymore
 
       positions.push(left.x, left.y, left.z, right.x, right.y, right.z);
 
@@ -129,14 +98,14 @@ export class TrackSurface {
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geometry.setIndex(indices);
 
-    // CRITICAL: DO NOT call computeVertexNormals() - we've manually set flat normals
+    // CRITICAL: DO NOT call computeVertexNormals() - we use Frenet frame normals
     geometry.computeBoundingSphere();
 
     // Use the proper road material with texture
     this.mesh = new THREE.Mesh(geometry, getRoadMaterial());
     this.mesh.receiveShadow = true;
 
-    // Verify mesh vertices are flat (all at Y=60)
+    // Verify mesh elevation range
     const posAttr = geometry.getAttribute('position');
     let minMeshY = Infinity, maxMeshY = -Infinity;
     for (let i = 0; i < posAttr.count; i++) {
@@ -144,7 +113,7 @@ export class TrackSurface {
       minMeshY = Math.min(minMeshY, y);
       maxMeshY = Math.max(maxMeshY, y);
     }
-    console.log(`✅ Mesh vertex Y range: min=${minMeshY.toFixed(3)}, max=${maxMeshY.toFixed(3)}, diff=${(maxMeshY - minMeshY).toFixed(3)}`);
+    console.log(`✅ Mesh elevation: min=${minMeshY.toFixed(1)}m, max=${maxMeshY.toFixed(1)}m, drop=${(maxMeshY - minMeshY).toFixed(1)}m`);
 
     this.samples = samples;
     this.totalLength = lengths[segments];
@@ -215,56 +184,59 @@ export class TrackSurface {
 }
 
 function getDefaultTrackControlPoints(): THREE.Vector3[] {
-  const Y = 60; // FLAT elevation for testing
+  // MOUNTAIN TOUGE - Elevation changes create realistic mountain pass
+  // Overall descent from 120m to 40m (80m drop)
+  // Mix of downhill, uphill, and flat sections for dynamic driving
+
   return [
-    // === SIMPLE LINEAR TOUGE - NO CROSSOVERS ===
-    // Point-to-point descent: progresses steadily in +X direction
+    // === START - Mountain Summit (120m) ===
+    new THREE.Vector3(0, 120, 0),
+    new THREE.Vector3(0, 118, -20),      // Gentle start descent
 
-    // === START ===
-    new THREE.Vector3(0, Y, 0),
-    new THREE.Vector3(0, Y, -20),
+    // === HAIRPIN 1 - Right (Steep descent into corner) ===
+    new THREE.Vector3(5, 112, -45),       // Drop 6m approaching
+    new THREE.Vector3(18, 105, -65),      // Drop 7m through entry
+    new THREE.Vector3(35, 100, -75),      // Apex slightly higher
+    new THREE.Vector3(50, 98, -72),       // Exit descent
+    new THREE.Vector3(62, 95, -60),       // Continue down
 
-    // === HAIRPIN 1 - Right ===
-    new THREE.Vector3(5, Y, -45),
-    new THREE.Vector3(18, Y, -65),
-    new THREE.Vector3(35, Y, -75),
-    new THREE.Vector3(50, Y, -72),
-    new THREE.Vector3(62, Y, -60),
+    // === STRAIGHT + S-CURVE (Fast descent) ===
+    new THREE.Vector3(75, 90, -40),       // 5m drop in straight
+    new THREE.Vector3(85, 85, -15),       // Continuing down
+    new THREE.Vector3(90, 82, 10),        // Slight compression
+    new THREE.Vector3(92, 80, 35),        // Level out before hairpin
 
-    // === STRAIGHT + S-CURVE ===
-    new THREE.Vector3(75, Y, -40),
-    new THREE.Vector3(85, Y, -15),
-    new THREE.Vector3(90, Y, 10),
-    new THREE.Vector3(92, Y, 35),
+    // === HAIRPIN 2 - Left (Uphill hairpin!) ===
+    new THREE.Vector3(95, 78, 55),        // Drop into entry
+    new THREE.Vector3(105, 75, 72),       // Lowest point at apex
+    new THREE.Vector3(122, 78, 82),       // CLIMB through exit! (+3m)
+    new THREE.Vector3(140, 82, 80),       // Continue climbing
+    new THREE.Vector3(155, 85, 68),       // Crest of climb
 
-    // === HAIRPIN 2 - Left ===
-    new THREE.Vector3(95, Y, 55),
-    new THREE.Vector3(105, Y, 72),
-    new THREE.Vector3(122, Y, 82),
-    new THREE.Vector3(140, Y, 80),
-    new THREE.Vector3(155, Y, 68),
+    // === MEDIUM SWEEPER (Downhill sweeper) ===
+    new THREE.Vector3(170, 80, 50),       // Start descent again
+    new THREE.Vector3(185, 72, 28),       // Fast descent (8m drop)
+    new THREE.Vector3(195, 68, 5),        // Continuing down
 
-    // === MEDIUM SWEEPER ===
-    new THREE.Vector3(170, Y, 50),
-    new THREE.Vector3(185, Y, 28),
-    new THREE.Vector3(195, Y, 5),
+    // === HAIRPIN 3 - Right (Blind crest entry) ===
+    new THREE.Vector3(200, 65, -20),      // Slight climb to crest
+    new THREE.Vector3(208, 62, -42),      // Drop over crest
+    new THREE.Vector3(222, 58, -58),      // Steep descent through turn
+    new THREE.Vector3(240, 54, -62),      // Continuing down
+    new THREE.Vector3(258, 52, -55),      // Level exit
 
-    // === HAIRPIN 3 - Right ===
-    new THREE.Vector3(200, Y, -20),
-    new THREE.Vector3(208, Y, -42),
-    new THREE.Vector3(222, Y, -58),
-    new THREE.Vector3(240, Y, -62),
-    new THREE.Vector3(258, Y, -55),
+    // === FINAL SWEEPERS (Fast descent to finish) ===
+    new THREE.Vector3(275, 48, -38),      // Gentle descent
+    new THREE.Vector3(290, 45, -18),      // Continuing
+    new THREE.Vector3(305, 42, 5),        // Almost at bottom
 
-    // === FINAL SWEEPERS ===
-    new THREE.Vector3(275, Y, -38),
-    new THREE.Vector3(290, Y, -18),
-    new THREE.Vector3(305, Y, 5),
+    // === FINISH - Valley Floor (40m) ===
+    new THREE.Vector3(320, 40, 25),       // Final descent
+    new THREE.Vector3(335, 40, 40),       // Level finish
+    new THREE.Vector3(350, 40, 50),       // Finish line
 
-    // === FINISH ===
-    new THREE.Vector3(320, Y, 25),
-    new THREE.Vector3(335, Y, 40),
-    new THREE.Vector3(350, Y, 50),
+    // Total elevation change: 80m descent (120m → 40m)
+    // Features: Steep descents, uphill hairpin, blind crests, fast downhill sweepers
   ];
 }
 
