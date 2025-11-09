@@ -531,7 +531,7 @@ export function runCannonTest() {
       // Snap position to safe zone (keep original Y height)
       chassisBody.position.set(safePos.x, carPos.y, safePos.z);
 
-      // ARCADE VELOCITY: Gentler bounce to prevent flipping
+      // ARCADE VELOCITY: Speed-dependent bounce
       const velocity = chassisBody.velocity;
       const vel3 = new THREE.Vector3(velocity.x, velocity.y, velocity.z);
       const wallNormal = sample.binormal.clone().multiplyScalar(wallSign);
@@ -541,8 +541,17 @@ export function runCannonTest() {
       const forwardSpeed = vel3.dot(trackForward);
       const forwardVel = trackForward.clone().multiplyScalar(forwardSpeed * 0.95); // Keep 95% forward speed
 
-      // ARCADE RESPONSE: Gentler bounce to prevent flipping
-      const bounceSpeed = 4.0; // Reduced from 8.0 m/s - gentler deflection
+      // SPEED-DEPENDENT BOUNCE: Faster car = stronger bounce, slower car = gentle push
+      const currentSpeed = Math.abs(forwardSpeed);
+
+      // Much gentler at low speeds
+      const minBounce = 0.3;  // Very gentle at crawling speeds (barely noticeable)
+      const maxBounce = 6.0;  // Strong bounce at high speeds
+
+      // Non-linear scaling: speed² makes low speeds even gentler
+      const speedFactor = Math.min(currentSpeed / 25.0, 1.0); // 25 m/s = max bounce
+      const quadraticFactor = speedFactor * speedFactor; // Square it for more dramatic difference
+      const bounceSpeed = minBounce + (maxBounce - minBounce) * quadraticFactor;
       const bounceVel = wallNormal.clone().multiplyScalar(-bounceSpeed);
 
       // New velocity: forward motion + gentle bounce
