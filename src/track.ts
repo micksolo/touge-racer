@@ -61,10 +61,13 @@ export class TrackSurface {
       const tNorm = i / segments;
       const localWidth = widthProfile ? widthProfile(tNorm) : width;
 
-      // Use Frenet frame for natural elevation following
+      // HYBRID APPROACH: Elevation changes but horizontal banking
+      // - Tangent follows curve (includes elevation)
+      // - Normal always points up (keeps road surface horizontal)
+      // - Binormal is horizontal cross product
       const tangent = frames.tangents[i].clone().normalize();
-      const normal = frames.normals[i].clone().normalize();
-      const binormal = frames.binormals[i].clone().normalize();
+      const normal = new THREE.Vector3(0, 1, 0); // Always straight up (no banking)
+      const binormal = new THREE.Vector3().crossVectors(normal, tangent).normalize();
 
       const left = point.clone().addScaledVector(binormal, localWidth * 0.5);
       const right = point.clone().addScaledVector(binormal, -localWidth * 0.5);

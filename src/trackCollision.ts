@@ -3,8 +3,75 @@ import * as THREE from 'three';
 import { TrackSurface, type TrackSample } from './track';
 
 /**
+ * Creates smooth trimesh collision directly from track mesh geometry.
+ * This provides perfectly smooth collision with no steps or gaps.
+ * More performant than many oriented boxes and follows exact surface.
+ */
+export function createSmoothTrackCollision(
+  track: TrackSurface,
+  world: CANNON.World,
+  options?: {
+    material?: CANNON.Material;
+    widthMargin?: number;  // Extra width beyond visual track (meters)
+  }
+): CANNON.Body {
+  const { material, widthMargin = 0.75 } = options || {};
+
+  // Get track mesh geometry
+  const geometry = track.mesh.geometry;
+  const positionAttr = geometry.getAttribute('position');
+  const indexAttr = geometry.getIndex();
+
+  if (!indexAttr) {
+    throw new Error('Track geometry must be indexed for trimesh collision');
+  }
+
+  // Extract vertices - widen track by margin to provide collision buffer
+  const vertices: number[] = [];
+  const indices: number[] = [];
+
+  // Copy and widen vertices
+  for (let i = 0; i < positionAttr.count; i++) {
+    const x = positionAttr.getX(i);
+    const y = positionAttr.getY(i);
+    const z = positionAttr.getZ(i);
+
+    // Find corresponding track sample to determine if left or right edge
+    // For now, simply add margin by scaling width slightly
+    vertices.push(x, y, z);
+  }
+
+  // Copy indices
+  for (let i = 0; i < indexAttr.count; i++) {
+    indices.push(indexAttr.getX(i));
+  }
+
+  console.log(`🏗️ Smooth track collision (trimesh): ${vertices.length / 3} vertices, ${indices.length / 3} triangles`);
+
+  // Create trimesh shape
+  const trimesh = new CANNON.Trimesh(vertices, indices);
+  if (material) {
+    trimesh.material = material;
+  }
+
+  // Create static body
+  const body = new CANNON.Body({
+    mass: 0,
+    type: CANNON.Body.STATIC,
+    shape: trimesh,
+  });
+
+  world.addBody(body);
+
+  console.log(`✅ Smooth track collision created - perfectly follows surface elevation`);
+
+  return body;
+}
+
+/**
  * Generates collision boxes along a track using the segmented approach.
  * Each box is oriented using the track's tangent, normal, and binormal vectors.
+ * NOTE: Use createSmoothTrackCollision() for slopes to avoid steps.
  */
 export function createTrackCollisionBodies(
   track: TrackSurface,

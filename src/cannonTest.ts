@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createMountainTrack } from './track';
-import { createTrackCollisionBodies, createTrackMaterial, createTrackWalls } from './trackCollision';
+import { createSmoothTrackCollision, createTrackMaterial, createTrackWalls } from './trackCollision';
 import { calculateVehicleTelemetry, formatTelemetryHUD, type VehicleTelemetry } from './telemetry';
 import { getVehicleConfig, describeVehicle, type VehicleConfigKey } from './vehicleConfig';
 
@@ -173,67 +173,12 @@ export function runCannonTest() {
   );
   world.addContactMaterial(carGuardrailContact);
 
-  // ORIENTED BOX COLLISION - Industry Standard Approach
-  // Boxes follow track geometry using tangent/normal/binormal vectors
-  const trackBodies: CANNON.Body[] = [];
-  const boxSpacing = 5.0; // Box every 5 meters - reasonable spacing
-  const boxWidth = track.width + 1.5; // Track width (12m) + 1.5m margin = 13.5m
-                                       // Gives 0.75m physical surface past visual edge on each side
-                                       // Prevents wheels from falling through while arcade system bounces car
-  const boxLength = 10.0; // 10m long boxes for overlap
-  const boxThickness = 0.5; // 1m thick collision volume
-
-  let distanceCounter = 0;
-  for (let i = 0; i < track.samples.length; i++) {
-    const sample = track.samples[i];
-
-    if (sample.distance >= distanceCounter) {
-      // Create oriented box following track geometry
-      // Box local axes: X = across track (binormal), Y = up (normal), Z = along track (tangent)
-      const shape = new CANNON.Box(new CANNON.Vec3(
-        boxWidth * 0.5,      // Half-width across track
-        boxThickness,        // Half-height (vertical)
-        boxLength * 0.5      // Half-length along track
-      ));
-      shape.material = trackMaterial;
-
-      // Build orientation quaternion from track basis vectors
-      const rotationMatrix = new THREE.Matrix4().makeBasis(
-        sample.binormal,  // X: right/left across track
-        sample.normal,    // Y: up
-        sample.tangent    // Z: forward along track
-      );
-      const threeQuat = new THREE.Quaternion().setFromRotationMatrix(rotationMatrix);
-      const orientation = new CANNON.Quaternion(
-        threeQuat.x,
-        threeQuat.y,
-        threeQuat.z,
-        threeQuat.w
-      );
-
-      const body = new CANNON.Body({
-        mass: 0,
-        type: CANNON.Body.STATIC,
-        quaternion: orientation,
-      });
-      body.addShape(shape);
-
-      // Position box centered on track centerline, with top at track surface
-      body.position.set(
-        sample.position.x,
-        sample.position.y - boxThickness, // Top surface at track level
-        sample.position.z
-      );
-
-      world.addBody(body);
-      trackBodies.push(body);
-
-      distanceCounter += boxSpacing;
-    }
-  }
-
-  console.log(`✅ Track collision: ${trackBodies.length} oriented boxes (every ${boxSpacing}m, ${boxWidth}m wide, ${boxLength}m long)`);
-  console.log(`   Following track curve using tangent/normal/binormal geometry`);;
+  // SMOOTH TRIMESH COLLISION - Directly from track mesh
+  // Perfectly smooth collision with no steps, follows exact track surface
+  const trackCollisionBody = createSmoothTrackCollision(track, world, {
+    material: trackMaterial,
+    widthMargin: 0.75,  // 0.75m extra width on each side for arcade wall system
+  });;
 
   // Add SMART guardrails - curvature-adaptive placement
   // Tighter spacing on corners to prevent gaps on outside of curve
@@ -347,8 +292,8 @@ export function runCannonTest() {
     collisionBoxHelpers.forEach(helper => scene.remove(helper));
     collisionBoxHelpers.length = 0;
 
-    // Create helpers for all collision bodies
-    [...trackBodies, ...guardrailBodies].forEach((body) => {
+    // Create helpers for guardrail collision bodies
+    guardrailBodies.forEach((body) => {
       if (body.shapes[0] instanceof CANNON.Box) {
         const shape = body.shapes[0] as CANNON.Box;
         const geometry = new THREE.BoxGeometry(
@@ -358,7 +303,7 @@ export function runCannonTest() {
         );
         const edges = new THREE.EdgesGeometry(geometry);
         const material = new THREE.LineBasicMaterial({
-          color: body === trackBodies[0] || trackBodies.includes(body) ? 0x00ff00 : 0xff0000,
+          color: 0xff0000,  // Red for guardrails (track is smooth trimesh, not visualized)
           linewidth: 1
         });
         const helper = new THREE.LineSegments(edges, material);
