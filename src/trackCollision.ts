@@ -69,24 +69,24 @@ export function createSmoothTrackCollision(
 }
 
 /**
- * Generates collision boxes along a track using the segmented approach.
- * Each box is oriented using the track's tangent, normal, and binormal vectors.
- * NOTE: Use createSmoothTrackCollision() for slopes to avoid steps.
+ * Generates collision wedges along a track.
+ * Each wedge spans two consecutive samples, creating a CONTINUOUS slope - no stepping!
+ * Uses ConvexPolyhedron for smooth top surface.
  */
 export function createTrackCollisionBodies(
   track: TrackSurface,
   world: CANNON.World,
   options?: {
-    segmentLength?: number;  // Distance between collision boxes (meters)
-    thickness?: number;       // Half-height of collision boxes (meters)
-    overlap?: number;         // Overlap between segments (meters)
+    segmentLength?: number;  // Distance between wedge samples (meters)
+    thickness?: number;       // Thickness of wedges (meters)
+    overlap?: number;         // IGNORED for wedges (kept for API compat)
     material?: CANNON.Material;
   }
 ): CANNON.Body[] {
   const {
-    segmentLength = 3,      // Sample every 3 meters (tighter spacing for curves)
-    thickness = 0.5,        // 1m thick collision volume
-    overlap = 3,            // 3m overlap between boxes - ensures no gaps on tight corners
+    segmentLength = 1.0,    // 1m spacing for wedges
+    thickness = 0.5,        // Wedge thickness
+    overlap = 0,            // Not used for wedges
     material,
   } = options || {};
 
@@ -94,38 +94,65 @@ export function createTrackCollisionBodies(
   const samples = track.samples;
   const trackWidth = track.width;
 
-  console.log(`🏗️ Generating track collision:`);
+  console.log(`🏗️ Generating smooth wedge collision:`);
   console.log(`   Total length: ${track.totalLength.toFixed(1)}m`);
   console.log(`   Samples: ${samples.length}`);
   console.log(`   Segment length: ${segmentLength}m`);
   console.log(`   Box dimensions: ${trackWidth}m × ${thickness * 2}m × ${segmentLength + overlap}m`);
 
-  // Create a box every 'segmentLength' meters along the track
-  // Use actual distance along curve, not sample count
-  let lastBoxDistance = -segmentLength; // Start before 0 so first box is at 0
+  // Create wedges by finding pairs of samples ~segmentLength apart
+  // Each wedge spans the full segmentLength distance with no gaps
+  let lastWedgeDistance = -segmentLength;
 
-  for (let i = 0; i < samples.length; i++) {
-    const sample = samples[i];
+  for (let i = 0; i < samples.length - 1; i++) {
+    const sampleA = samples[i];
 
-    // Check if we've traveled far enough to place another box
-    if (sample.distance - lastBoxDistance >= segmentLength) {
-      // Create oriented collision box
-      const body = createOrientedBox(
-        sample,
-        trackWidth,
+    // Check if we've traveled far enough to place another wedge
+    if (sampleA.distance - lastWedgeDistance >= segmentLength) {
+      // Find sampleB that's approximately segmentLength ahead
+      let sampleB = samples[i + 1];
+      let bestJ = i + 1;
+      let bestDiff = Math.abs((sampleB.distance - sampleA.distance) - segmentLength);
+
+      // Search ahead to find sample closest to segmentLength distance
+      for (let j = i + 2; j < samples.length && samples[j].distance - sampleA.distance < segmentLength * 1.5; j++) {
+        const diff = Math.abs((samples[j].distance - sampleA.distance) - segmentLength);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestJ = j;
+          sampleB = samples[j];
+        }
+      }
+
+      // Create convex wedge spanning from sampleA to sampleB
+      const body = createSegmentWedge(
+        sampleA,
+        sampleB,
+        trackWidth + 3.0,  // Add margin for safety
         thickness,
-        segmentLength + overlap,  // Add overlap to prevent gaps
         material
       );
 
-      world.addBody(body);
-      bodies.push(body);
+      // Only add valid bodies (ones with shapes)
+      if (body.shapes.length > 0) {
+        world.addBody(body);
+        bodies.push(body);
 
-      lastBoxDistance = sample.distance;
+        // Debug: Log first 3 valid segments
+        if (bodies.length <= 3) {
+          const pos = body.position;
+          const actualLength = sampleB.distance - sampleA.distance;
+          console.log(`📦 Valid segment ${bodies.length}: pos=(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}), dist=${sampleA.distance.toFixed(1)}m, length=${actualLength.toFixed(2)}m`);
+        }
+      } else {
+        console.warn(`⚠️ Skipped degenerate wedge at distance ${sampleA.distance.toFixed(1)}m`);
+      }
+
+      lastWedgeDistance = sampleA.distance;
     }
   }
 
-  console.log(`✅ Created ${bodies.length} collision boxes`);
+  console.log(`✅ Created ${bodies.length} smooth wedge segments`);
 
   // Verify and log sample transforms (first 3 boxes)
   console.log(`🔍 Sample transforms and basis vectors (first 3):`);
@@ -151,7 +178,7 @@ export function createTrackCollisionBodies(
     console.log(`     Position: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
     console.log(`     Distance: ${sample.distance.toFixed(1)}m`);
     console.log(`     Tangent:  (${tangent.x.toFixed(3)}, ${tangent.y.toFixed(3)}, ${tangent.z.toFixed(3)}) len=${tangent.length().toFixed(3)}`);
-    console.log(`     Up Normal: (${upNormal.x.toFixed(3)}, ${upNormal.y.toFixed(3)}, ${upNormal.z.toFixed(3)}) len=${upNormal.length().toFixed(3)} [FLAT ROAD]`);
+    console.log(`     Normal: (${upNormal.x.toFixed(3)}, ${upNormal.y.toFixed(3)}, ${upNormal.z.toFixed(3)}) len=${upNormal.length().toFixed(3)} [SLOPED SURFACE]`);
     console.log(`     Binormal: (${binormal.x.toFixed(3)}, ${binormal.y.toFixed(3)}, ${binormal.z.toFixed(3)}) len=${binormal.length().toFixed(3)}`);
     console.log(`     Orthogonality: T·N=${dotTN.toFixed(3)}, T·B=${dotTB.toFixed(3)}, N·B=${dotNB.toFixed(3)} (should be ~0)`);
 
@@ -164,8 +191,118 @@ export function createTrackCollisionBodies(
 }
 
 /**
- * Creates a CANNON.Body with a box shape oriented according to track geometry.
+ * Creates a box segment that spans two consecutive track samples.
+ * The box is rotated to match the slope between samples - creating a continuous ramp.
+ * Much simpler and more reliable than ConvexPolyhedron.
+ */
+function createSegmentWedge(
+  sampleA: TrackSample,
+  sampleB: TrackSample,
+  width: number,
+  thickness: number,
+  material?: CANNON.Material
+): CANNON.Body {
+  // Calculate midpoint and length
+  const midpoint = new THREE.Vector3()
+    .addVectors(sampleA.position, sampleB.position)
+    .multiplyScalar(0.5);
+
+  const segmentLength = sampleA.position.distanceTo(sampleB.position);
+
+  // FIX 1: Stabilize basis vectors to ensure orthonormal basis
+  // Forward direction (tangent) along the slope
+  const forward = new THREE.Vector3()
+    .subVectors(sampleB.position, sampleA.position)
+    .normalize();
+
+  // Keep binormal continuous - prevent it from canceling to zero on tight corners
+  let right = sampleA.binormal.clone();
+  if (right.dot(sampleB.binormal) < 0) {
+    right.negate(); // Flip if pointing opposite direction
+  }
+  right.add(sampleB.binormal).normalize();
+
+  // Re-orthogonalize using Gram-Schmidt: subtract any forward component
+  const forwardComponent = forward.clone().multiplyScalar(forward.dot(right));
+  right.sub(forwardComponent);
+
+  // Check if right is degenerate before normalizing
+  if (right.lengthSq() < 0.0001) {
+    console.warn('⚠️ Right vector degenerate after Gram-Schmidt, skipping segment');
+    return new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC });
+  }
+  right.normalize();
+
+  // Up vector is perpendicular to both forward and right
+  const up = new THREE.Vector3().crossVectors(forward, right);
+
+  // Check if up is degenerate before normalizing
+  if (up.lengthSq() < 0.0001) {
+    console.warn('⚠️ Up vector degenerate, skipping segment');
+    return new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC });
+  }
+  up.normalize();
+
+  // Final validation
+  const lenF = forward.length();
+  const lenR = right.length();
+  const lenU = up.length();
+
+  if (!Number.isFinite(lenF) || !Number.isFinite(lenR) || !Number.isFinite(lenU) ||
+      Math.abs(lenF - 1.0) > 0.01 || Math.abs(lenR - 1.0) > 0.01 || Math.abs(lenU - 1.0) > 0.01) {
+    console.warn(`⚠️ Invalid basis lengths: forward=${lenF.toFixed(3)}, right=${lenR.toFixed(3)}, up=${lenU.toFixed(3)}`);
+    return new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC });
+  }
+
+  // Create box shape
+  const halfExtents = new CANNON.Vec3(
+    width * 0.5,        // Half width (left-right)
+    thickness * 0.5,    // Half thickness (up-down)
+    segmentLength * 0.5 // Half segment length
+  );
+
+  const shape = new CANNON.Box(halfExtents);
+  if (material) {
+    shape.material = material;
+  }
+
+  // Build orientation from stabilized basis
+  const orientation = buildOrientationQuaternion(forward, up, right);
+
+  // FIX 2: Position along local up vector, not world Y
+  // Offset down from track surface by thickness/2 along the local up direction
+  const center = midpoint.clone().sub(up.clone().multiplyScalar(thickness * 0.5));
+
+  const body = new CANNON.Body({
+    mass: 0,
+    shape,
+    position: new CANNON.Vec3(center.x, center.y, center.z),
+    quaternion: orientation,
+    type: CANNON.Body.STATIC,
+  });
+
+  // Debug first segment in detail
+  if (sampleA.distance < 1.0) {
+    console.log(`🔍 DETAILED DEBUG - First segment:`);
+    console.log(`   Sample A: (${sampleA.position.x.toFixed(2)}, ${sampleA.position.y.toFixed(2)}, ${sampleA.position.z.toFixed(2)})`);
+    console.log(`   Sample B: (${sampleB.position.x.toFixed(2)}, ${sampleB.position.y.toFixed(2)}, ${sampleB.position.z.toFixed(2)})`);
+    console.log(`   Midpoint: (${midpoint.x.toFixed(2)}, ${midpoint.y.toFixed(2)}, ${midpoint.z.toFixed(2)})`);
+    console.log(`   Forward: (${forward.x.toFixed(3)}, ${forward.y.toFixed(3)}, ${forward.z.toFixed(3)})`);
+    console.log(`   Right: (${right.x.toFixed(3)}, ${right.y.toFixed(3)}, ${right.z.toFixed(3)})`);
+    console.log(`   Up: (${up.x.toFixed(3)}, ${up.y.toFixed(3)}, ${up.z.toFixed(3)})`);
+    console.log(`   Center offset: (${(up.x * thickness * 0.5).toFixed(3)}, ${(up.y * thickness * 0.5).toFixed(3)}, ${(up.z * thickness * 0.5).toFixed(3)})`);
+    console.log(`   Final center: (${center.x.toFixed(2)}, ${center.y.toFixed(2)}, ${center.z.toFixed(2)})`);
+    console.log(`   Quaternion: (${orientation.x.toFixed(3)}, ${orientation.y.toFixed(3)}, ${orientation.z.toFixed(3)}, ${orientation.w.toFixed(3)})`);
+    console.log(`   Box half-extents: (${halfExtents.x}, ${halfExtents.y}, ${halfExtents.z})`);
+  }
+
+  return body;
+}
+
+/**
+ * DEPRECATED: Creates a CANNON.Body with a box shape oriented according to track geometry.
  * Uses transform matrix from tangent/normal/binormal vectors.
+ * Replaced by createSegmentWedge for smooth slopes.
  */
 function createOrientedBox(
   sample: TrackSample,
@@ -259,6 +396,81 @@ export function createTrackMaterial(options?: {
     friction,
     restitution,
   });
+}
+
+/**
+ * Creates ultra-dense raycast ribbon for smooth wheel ground detection.
+ * Uses extremely tight spacing (5cm default) to eliminate stepping on slopes.
+ * Configure with collisionFilterMask = 0 so chassis doesn't collide, but raycasts hit it.
+ */
+export function createRaycastRibbon(
+  track: TrackSurface,
+  world: CANNON.World,
+  options?: {
+    ribbonWidth?: number;    // Width of ribbon
+    segmentLength?: number;  // Spacing between segments
+    height?: number;         // Height of ribbon boxes
+    material?: CANNON.Material;
+  }
+): CANNON.Body[] {
+  const {
+    ribbonWidth = track.width,
+    segmentLength = 0.05,  // 5cm default
+    height = 0.6,
+    material,
+  } = options || {};
+
+  const bodies: CANNON.Body[] = [];
+  const samples = track.samples;
+
+  console.log(`🎗️ Creating smooth raycast ribbon: ${ribbonWidth}m wide, ${segmentLength}m spacing`);
+
+  let lastDistance = -segmentLength;
+
+  for (let i = 0; i < samples.length; i++) {
+    const sample = samples[i];
+
+    if (sample.distance - lastDistance >= segmentLength) {
+      const halfExtents = new CANNON.Vec3(
+        ribbonWidth * 0.5,
+        height * 0.5,
+        segmentLength * 0.5
+      );
+
+      const shape = new CANNON.Box(halfExtents);
+      if (material) {
+        shape.material = material;
+      }
+
+      // Full orientation - follows slope perfectly
+      const orientation = buildOrientationQuaternion(
+        sample.tangent,
+        sample.normal,
+        sample.binormal
+      );
+
+      const body = new CANNON.Body({
+        mass: 0,
+        shape,
+        position: new CANNON.Vec3(
+          sample.position.x,
+          sample.position.y - height * 0.5,  // Top at track level
+          sample.position.z
+        ),
+        quaternion: orientation,
+        type: CANNON.Body.STATIC,
+      });
+
+      world.addBody(body);
+      bodies.push(body);
+
+      lastDistance = sample.distance;
+    }
+  }
+
+  console.log(`✅ Created ${bodies.length} ribbon segments`);
+
+  return bodies;
 }
 
 /**

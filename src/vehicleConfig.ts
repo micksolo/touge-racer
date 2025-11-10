@@ -59,14 +59,14 @@ export interface VehicleConfig {
  */
 export const PROTO_CONFIG: VehicleConfig = {
   name: 'Prototype',
-  description: 'Prototype test vehicle (800kg, compact dimensions)',
+  description: 'Prototype test vehicle (1200kg, compact dimensions)',
 
   chassis: {
     // Compact dimensions for narrow touge roads
     halfWidth: 0.75,   // 1.5m total width (was 2.0m)
     halfHeight: 0.5,   // 1.0m height
     halfLength: 1.8,   // 3.6m length (was 4.0m)
-    mass: 800,
+    mass: 1200,        // Increased from 800kg to reduce airborne issues
     centerOfMassOffset: new CANNON.Vec3(0, -0.5, 0.9), // Very front-biased to keep front wheels down
   },
 
@@ -82,11 +82,11 @@ export const PROTO_CONFIG: VehicleConfig = {
   },
 
   suspension: {
-    stiffness: 100,
+    stiffness: 120,            // Increased for heavier mass
     restLength: 0.5,
-    dampingCompression: 12.0,  // Increased from 8.0 to reduce bouncing
-    dampingRelaxation: 8.0,    // Increased from 5.0 to reduce bouncing
-    maxForce: 50000,  // Increased from 10000 to support 800kg mass
+    dampingCompression: 15.0,  // Increased to reduce bouncing with heavier mass
+    dampingRelaxation: 10.0,   // Increased to reduce bouncing with heavier mass
+    maxForce: 75000,           // Increased from 50000 to support 1200kg mass
     maxTravel: 0.5,
   },
 

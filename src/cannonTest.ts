@@ -1,14 +1,19 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createMountainTrack } from './track';
-import { createSmoothTrackCollision, createTrackMaterial, createTrackWalls } from './trackCollision';
+import { createTrackCollisionBodies, createRaycastRibbon, createTrackMaterial, createTrackWalls } from './trackCollision';
 import { calculateVehicleTelemetry, formatTelemetryHUD, type VehicleTelemetry } from './telemetry';
 import { getVehicleConfig, describeVehicle, type VehicleConfigKey } from './vehicleConfig';
 
 // ============================================================================
 // CANNON-ES VEHICLE TEST - MOUNTAIN TRACK
-// RaycastVehicle on touge track with segmented box collision
+// RaycastVehicle on touge track with TWO-LAYER collision system
 // ============================================================================
+
+// COLLISION GROUPS for two-layer system
+const CHASSIS_GROUP = 1;      // Chassis body
+const MAIN_GROUND_GROUP = 2;  // Main collision boxes (chassis safety net)
+const RAYCAST_GROUP = 4;      // Smooth ribbon for wheel raycasts only
 
 export function runCannonTest() {
   console.log('🧪 Starting cannon-es vehicle test on mountain track...');
@@ -173,12 +178,14 @@ export function runCannonTest() {
   );
   world.addContactMaterial(carGuardrailContact);
 
-  // SMOOTH TRIMESH COLLISION - Directly from track mesh
-  // Perfectly smooth collision with no steps, follows exact track surface
-  const trackCollisionBody = createSmoothTrackCollision(track, world, {
+  // SMOOTH WEDGE COLLISION - Continuous slopes, no stepping!
+  // Each wedge spans two consecutive track samples
+  // Top surface forms a continuous slope - wheel raycasts never see discontinuities
+  const trackBodies = createTrackCollisionBodies(track, world, {
+    segmentLength: 0.8,    // 0.8m spacing = 20% overlap to eliminate gaps
+    thickness: 1.0,        // Thicker boxes (1m) for more forgiving collision
     material: trackMaterial,
-    widthMargin: 0.75,  // 0.75m extra width on each side for arcade wall system
-  });;
+  });
 
   // Add SMART guardrails - curvature-adaptive placement
   // Tighter spacing on corners to prevent gaps on outside of curve
@@ -292,7 +299,30 @@ export function runCannonTest() {
     collisionBoxHelpers.forEach(helper => scene.remove(helper));
     collisionBoxHelpers.length = 0;
 
-    // Create helpers for guardrail collision bodies
+    // Create helpers for track wedges (green)
+    trackBodies.forEach((body) => {
+      if (body.shapes[0] instanceof CANNON.Box) {
+        const shape = body.shapes[0] as CANNON.Box;
+        const geometry = new THREE.BoxGeometry(
+          shape.halfExtents.x * 2,
+          shape.halfExtents.y * 2,
+          shape.halfExtents.z * 2
+        );
+        const edges = new THREE.EdgesGeometry(geometry);
+        const material = new THREE.LineBasicMaterial({
+          color: 0x00ff00,  // Green for track collision
+          linewidth: 2
+        });
+        const helper = new THREE.LineSegments(edges, material);
+        helper.position.copy(body.position as any);
+        helper.quaternion.copy(body.quaternion as any);
+        helper.visible = false; // Hidden by default
+        scene.add(helper);
+        collisionBoxHelpers.push(helper);
+      }
+    });
+
+    // Create helpers for guardrail collision bodies (red)
     guardrailBodies.forEach((body) => {
       if (body.shapes[0] instanceof CANNON.Box) {
         const shape = body.shapes[0] as CANNON.Box;
@@ -303,7 +333,7 @@ export function runCannonTest() {
         );
         const edges = new THREE.EdgesGeometry(geometry);
         const material = new THREE.LineBasicMaterial({
-          color: 0xff0000,  // Red for guardrails (track is smooth trimesh, not visualized)
+          color: 0xff0000,  // Red for guardrails
           linewidth: 1
         });
         const helper = new THREE.LineSegments(edges, material);

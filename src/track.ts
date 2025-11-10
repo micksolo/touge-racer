@@ -40,13 +40,13 @@ export class TrackSurface {
     const points = curve.getPoints(segments);
     const lengths = curve.getLengths(segments);
 
-    // DEBUG: Check if curve points are actually flat
+    // DEBUG: Check elevation range
     let minY = Infinity, maxY = -Infinity;
     points.forEach(p => {
       minY = Math.min(minY, p.y);
       maxY = Math.max(maxY, p.y);
     });
-    console.log(`✅ Track geometry: ${segments + 1} points, Y range: ${minY.toFixed(1)}-${maxY.toFixed(1)} (elevation: ${(maxY - minY).toFixed(1)}m)`);
+    console.log(`✅ Track geometry: ${segments + 1} points, Y range: ${minY.toFixed(1)}-${maxY.toFixed(1)} (elevation: ${(maxY - minY).toFixed(1)}m) - SLOPED SURFACE`);
     const indices: number[] = [];
     const positions: number[] = [];
     const normals: number[] = [];
@@ -61,13 +61,30 @@ export class TrackSurface {
       const tNorm = i / segments;
       const localWidth = widthProfile ? widthProfile(tNorm) : width;
 
-      // HYBRID APPROACH: Elevation changes but horizontal banking
-      // - Tangent follows curve (includes elevation)
-      // - Normal always points up (keeps road surface horizontal)
-      // - Binormal is horizontal cross product
+      // ROAD-ALIGNED APPROACH: Build proper road frame
+      // - Tangent follows the curve (includes elevation)
+      // - Binormal is horizontal (left-right across road)
+      // - Normal is perpendicular to both (surface normal, will tilt on slopes)
       const tangent = frames.tangents[i].clone().normalize();
-      const normal = new THREE.Vector3(0, 1, 0); // Always straight up (no banking)
-      const binormal = new THREE.Vector3().crossVectors(normal, tangent).normalize();
+
+      // Build horizontal binormal: perpendicular to tangent, in horizontal plane
+      const worldUp = new THREE.Vector3(0, 1, 0);
+
+      // Binormal points horizontally to the right
+      // Cross product: worldUp × tangent = horizontal right direction
+      const binormal = new THREE.Vector3().crossVectors(worldUp, tangent);
+
+      // If tangent is nearly vertical, binormal becomes degenerate
+      if (binormal.lengthSq() < 0.001) {
+        // Fallback: use a horizontal direction
+        binormal.set(1, 0, 0);
+      } else {
+        binormal.normalize();
+      }
+
+      // Normal points upward-ish, perpendicular to both tangent and binormal
+      // Cross product: tangent × binormal = normal (right-hand rule)
+      const normal = new THREE.Vector3().crossVectors(tangent, binormal).normalize();
 
       const left = point.clone().addScaledVector(binormal, localWidth * 0.5);
       const right = point.clone().addScaledVector(binormal, -localWidth * 0.5);
