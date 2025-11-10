@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createMountainTrack } from './track';
-import { createTrackCollisionBodies, createRaycastRibbon, createTrackMaterial, createTrackWalls } from './trackCollision';
+import { createTrackCollisionBodies, createRaycastRibbon, createTrackMaterial, createTrackWalls, visualizeCollisionBodies } from './trackCollision';
 import { calculateVehicleTelemetry, formatTelemetryHUD, type VehicleTelemetry } from './telemetry';
 import { getVehicleConfig, describeVehicle, type VehicleConfigKey } from './vehicleConfig';
 
@@ -182,10 +182,14 @@ export function runCannonTest() {
   // Each wedge spans two consecutive track samples
   // Top surface forms a continuous slope - wheel raycasts never see discontinuities
   const trackBodies = createTrackCollisionBodies(track, world, {
-    segmentLength: 0.8,    // 0.8m spacing = 20% overlap to eliminate gaps
-    thickness: 1.0,        // Thicker boxes (1m) for more forgiving collision
+    segmentLength: 0.8,    // 0.8m spacing - balanced performance
+    thickness: 1.5,        // Thick enough for collision tolerance
     material: trackMaterial,
   });
+
+  // DEBUG: Visualize collision boxes (toggle with 'V' key)
+  let collisionWireframes: THREE.LineSegments[] = [];
+  let showCollisionDebug = false;
 
   // Add SMART guardrails - curvature-adaptive placement
   // Tighter spacing on corners to prevent gaps on outside of curve
@@ -377,7 +381,7 @@ export function runCannonTest() {
   // Spawn chassis higher above the ground and let it drop
   // This prevents clipping into collision boxes at spawn
   const wheelConnectionY = Math.abs(vehicleConfig.wheels.positions[0].y);
-  const spawnHeight = vehicleConfig.wheels.radius + vehicleConfig.suspension.restLength + wheelConnectionY + 5.0; // Very large buffer - car will drop
+  const spawnHeight = vehicleConfig.wheels.radius + vehicleConfig.suspension.restLength + wheelConnectionY + 0.5; // Small drop for gentle landing
   chassisBody.position.set(startPos.x, startPos.y + spawnHeight, startPos.z);
 
   // Orient car along track tangent
@@ -386,7 +390,7 @@ export function runCannonTest() {
 
   world.addBody(chassisBody);
 
-  console.log(`🚗 Chassis spawned at Y=${(startPos.y + spawnHeight).toFixed(1)} (drops to track at Y=${startPos.y.toFixed(1)})`);
+  console.log(`🚗 Chassis spawned at Y=${(startPos.y + spawnHeight).toFixed(1)} (gentle drop to track at Y=${startPos.y.toFixed(1)})`);
 
   // Create RaycastVehicle
   const vehicle = new CANNON.RaycastVehicle({
@@ -734,6 +738,7 @@ export function runCannonTest() {
   let hasLanded = false;
   let frameCount = 0;
   let lastLogTime = 0;
+  let lastAirborneLog = 0;
 
   function animate() {
     requestAnimationFrame(animate);
@@ -856,6 +861,23 @@ export function runCannonTest() {
     if (!hasLanded && chassisBody.position.y < 62) {
       console.log(`🎯 Vehicle landed on track`);
       hasLanded = true;
+    }
+
+    // Airborne detection with front/rear wheel tracking (throttled to once per second)
+    const frontWheelsOnGround = telemetry.wheels.slice(0, 2).filter(w => w.isInContact).length;
+    const rearWheelsOnGround = telemetry.wheels.slice(2, 4).filter(w => w.isInContact).length;
+    const isAirborne = wheelsOnGround === 0;
+    const isFrontUp = frontWheelsOnGround === 0 && rearWheelsOnGround > 0; // Wheelie
+
+    if ((isAirborne || isFrontUp) && Date.now() - lastAirborneLog > 1000) {
+      const carPos = new THREE.Vector3(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z);
+      const projection = track.projectPoint(carPos);
+      if (isFrontUp) {
+        console.log(`🤸 WHEELIE at ${projection.sample.distance.toFixed(1)}m - Front wheels up! (F:${frontWheelsOnGround}/2, R:${rearWheelsOnGround}/2)`);
+      } else {
+        console.log(`🚁 AIRBORNE at ${projection.sample.distance.toFixed(1)}m (Y=${carPos.y.toFixed(1)}m, track Y=${projection.projected.y.toFixed(1)}m) (F:${frontWheelsOnGround}/2, R:${rearWheelsOnGround}/2)`);
+      }
+      lastAirborneLog = Date.now();
     }
 
     // Reduced logging - only every 3 seconds when moving

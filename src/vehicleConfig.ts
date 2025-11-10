@@ -59,15 +59,15 @@ export interface VehicleConfig {
  */
 export const PROTO_CONFIG: VehicleConfig = {
   name: 'Prototype',
-  description: 'Prototype test vehicle (1200kg, compact dimensions)',
+  description: 'Prototype test vehicle (2200kg, ultra-stable setup)',
 
   chassis: {
     // Compact dimensions for narrow touge roads
     halfWidth: 0.75,   // 1.5m total width (was 2.0m)
     halfHeight: 0.5,   // 1.0m height
     halfLength: 1.8,   // 3.6m length (was 4.0m)
-    mass: 1200,        // Increased from 800kg to reduce airborne issues
-    centerOfMassOffset: new CANNON.Vec3(0, -0.5, 0.9), // Very front-biased to keep front wheels down
+    mass: 2200,        // Very heavy for maximum stability
+    centerOfMassOffset: new CANNON.Vec3(0, -0.7, 0.9), // Very low and front-heavy to prevent wheelies
   },
 
   wheels: {
@@ -82,22 +82,22 @@ export const PROTO_CONFIG: VehicleConfig = {
   },
 
   suspension: {
-    stiffness: 120,            // Increased for heavier mass
-    restLength: 0.5,
-    dampingCompression: 15.0,  // Increased to reduce bouncing with heavier mass
-    dampingRelaxation: 10.0,   // Increased to reduce bouncing with heavier mass
-    maxForce: 75000,           // Increased from 50000 to support 1200kg mass
-    maxTravel: 0.5,
+    stiffness: 100,            // Stiffer to support 2200kg
+    restLength: 0.3,           // Short suspension for low, stable ride
+    dampingCompression: 25.0,  // Higher compression damping to absorb bumps
+    dampingRelaxation: 30.0,   // Very high rebound damping to prevent bouncing
+    maxForce: 120000,          // Strong suspension to support 2200kg
+    maxTravel: 0.15,           // Even more limited travel
   },
 
   dynamics: {
     angularDamping: 0.95,  // Very high to prevent wheelies and flipping
-    linearDamping: 0.1,    // Increased from 0.05 to reduce bouncing
+    linearDamping: 0.08,   // Low damping - let engine provide the power
   },
 
   power: {
-    maxEngineForce: 1200,  // Further reduced to keep front wheels planted
-    maxBrakeForce: 800,    // Strong brakes for 800kg mass
+    maxEngineForce: 3000,  // Scaled for 2200kg mass
+    maxBrakeForce: 2200,   // Strong brakes scaled for mass
     maxSteerAngle: Math.PI / 8, // 22.5 degrees
   },
 

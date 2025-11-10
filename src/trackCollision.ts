@@ -3,6 +3,65 @@ import * as THREE from 'three';
 import { TrackSurface, type TrackSample } from './track';
 
 /**
+ * DEBUG: Visualize collision boxes as wireframes
+ * Shows exact placement, size, and orientation of collision geometry
+ */
+export function visualizeCollisionBodies(
+  bodies: CANNON.Body[],
+  scene: THREE.Scene,
+  options?: {
+    color?: number;
+    opacity?: number;
+  }
+): THREE.LineSegments[] {
+  const { color = 0x00ff00, opacity = 0.4 } = options || {};
+  const wireframes: THREE.LineSegments[] = [];
+
+  for (const body of bodies) {
+    for (const shape of body.shapes) {
+      if (shape instanceof CANNON.Box) {
+        // Create box geometry matching CANNON.Box half-extents
+        const box = shape as CANNON.Box;
+        const geometry = new THREE.BoxGeometry(
+          box.halfExtents.x * 2,
+          box.halfExtents.y * 2,
+          box.halfExtents.z * 2
+        );
+
+        const edges = new THREE.EdgesGeometry(geometry);
+        const material = new THREE.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity,
+          depthTest: true,
+        });
+
+        const wireframe = new THREE.LineSegments(edges, material);
+
+        // Apply same position and rotation as physics body
+        wireframe.position.set(
+          body.position.x,
+          body.position.y,
+          body.position.z
+        );
+        wireframe.quaternion.set(
+          body.quaternion.x,
+          body.quaternion.y,
+          body.quaternion.z,
+          body.quaternion.w
+        );
+
+        scene.add(wireframe);
+        wireframes.push(wireframe);
+      }
+    }
+  }
+
+  console.log(`🔍 Visualized ${wireframes.length} collision boxes`);
+  return wireframes;
+}
+
+/**
  * Creates smooth trimesh collision directly from track mesh geometry.
  * This provides perfectly smooth collision with no steps or gaps.
  * More performant than many oriented boxes and follows exact surface.
@@ -94,29 +153,41 @@ export function createTrackCollisionBodies(
   const samples = track.samples;
   const trackWidth = track.width;
 
-  console.log(`🏗️ Generating smooth wedge collision:`);
-  console.log(`   Total length: ${track.totalLength.toFixed(1)}m`);
-  console.log(`   Samples: ${samples.length}`);
-  console.log(`   Segment length: ${segmentLength}m`);
-  console.log(`   Box dimensions: ${trackWidth}m × ${thickness * 2}m × ${segmentLength + overlap}m`);
+  console.log(`🏗️ Track collision: ${track.totalLength.toFixed(0)}m track, adaptive spacing`);
 
-  // Create wedges by finding pairs of samples ~segmentLength apart
-  // Each wedge spans the full segmentLength distance with no gaps
+  // ADAPTIVE SPACING: Tighter on corners, wider on straights
+  // This eliminates stepping on tight corners while maintaining good performance
   let lastWedgeDistance = -segmentLength;
+  const curvatureThreshold = 0.15; // Detect tight corners (same as guardrails)
 
   for (let i = 0; i < samples.length - 1; i++) {
     const sampleA = samples[i];
 
+    // Calculate curvature (rate of tangent change)
+    let curvature = 0;
+    if (i + 10 < samples.length) {
+      const tangentDiff = new THREE.Vector3()
+        .subVectors(samples[i + 10].tangent, sampleA.tangent)
+        .length();
+      const distanceDiff = samples[i + 10].distance - sampleA.distance;
+      curvature = tangentDiff / Math.max(distanceDiff, 0.1);
+    }
+
+    // Adaptive spacing: tight corners = 0.5m, straights = 1.0m
+    const isTightCorner = curvature > curvatureThreshold;
+    const adaptiveSpacing = isTightCorner ? 0.5 : 1.0;
+    const boxSpanLength = adaptiveSpacing * 4.0; // 4x overlap - longer boxes = smoother slopes
+
     // Check if we've traveled far enough to place another wedge
-    if (sampleA.distance - lastWedgeDistance >= segmentLength) {
-      // Find sampleB that's approximately segmentLength ahead
+    if (sampleA.distance - lastWedgeDistance >= adaptiveSpacing) {
+      // Find sampleB that's approximately boxSpanLength ahead
       let sampleB = samples[i + 1];
       let bestJ = i + 1;
-      let bestDiff = Math.abs((sampleB.distance - sampleA.distance) - segmentLength);
+      let bestDiff = Math.abs((sampleB.distance - sampleA.distance) - boxSpanLength);
 
-      // Search ahead to find sample closest to segmentLength distance
-      for (let j = i + 2; j < samples.length && samples[j].distance - sampleA.distance < segmentLength * 1.5; j++) {
-        const diff = Math.abs((samples[j].distance - sampleA.distance) - segmentLength);
+      // Search ahead to find sample closest to boxSpanLength distance
+      for (let j = i + 2; j < samples.length && samples[j].distance - sampleA.distance < boxSpanLength * 1.5; j++) {
+        const diff = Math.abs((samples[j].distance - sampleA.distance) - boxSpanLength);
         if (diff < bestDiff) {
           bestDiff = diff;
           bestJ = j;
@@ -137,55 +208,13 @@ export function createTrackCollisionBodies(
       if (body.shapes.length > 0) {
         world.addBody(body);
         bodies.push(body);
-
-        // Debug: Log first 3 valid segments
-        if (bodies.length <= 3) {
-          const pos = body.position;
-          const actualLength = sampleB.distance - sampleA.distance;
-          console.log(`📦 Valid segment ${bodies.length}: pos=(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}), dist=${sampleA.distance.toFixed(1)}m, length=${actualLength.toFixed(2)}m`);
-        }
-      } else {
-        console.warn(`⚠️ Skipped degenerate wedge at distance ${sampleA.distance.toFixed(1)}m`);
       }
 
       lastWedgeDistance = sampleA.distance;
     }
   }
 
-  console.log(`✅ Created ${bodies.length} smooth wedge segments`);
-
-  // Verify and log sample transforms (first 3 boxes)
-  console.log(`🔍 Sample transforms and basis vectors (first 3):`);
-  let boxIndex = 0;
-  let lastCheckDistance = -segmentLength;
-
-  for (let i = 0; i < samples.length && boxIndex < Math.min(3, bodies.length); i++) {
-    const sample = samples[i];
-
-    if (sample.distance - lastCheckDistance >= segmentLength) {
-      const pos = bodies[boxIndex].position;
-
-    // Verify basis is orthonormal (normal now points up, no flip needed)
-    const tangent = sample.tangent;
-    const upNormal = sample.normal.clone();
-    const binormal = sample.binormal;
-
-    const dotTN = tangent.dot(upNormal);
-    const dotTB = tangent.dot(binormal);
-    const dotNB = upNormal.dot(binormal);
-
-    console.log(`   Box ${boxIndex}:`);
-    console.log(`     Position: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
-    console.log(`     Distance: ${sample.distance.toFixed(1)}m`);
-    console.log(`     Tangent:  (${tangent.x.toFixed(3)}, ${tangent.y.toFixed(3)}, ${tangent.z.toFixed(3)}) len=${tangent.length().toFixed(3)}`);
-    console.log(`     Normal: (${upNormal.x.toFixed(3)}, ${upNormal.y.toFixed(3)}, ${upNormal.z.toFixed(3)}) len=${upNormal.length().toFixed(3)} [SLOPED SURFACE]`);
-    console.log(`     Binormal: (${binormal.x.toFixed(3)}, ${binormal.y.toFixed(3)}, ${binormal.z.toFixed(3)}) len=${binormal.length().toFixed(3)}`);
-    console.log(`     Orthogonality: T·N=${dotTN.toFixed(3)}, T·B=${dotTB.toFixed(3)}, N·B=${dotNB.toFixed(3)} (should be ~0)`);
-
-      lastCheckDistance = sample.distance;
-      boxIndex++;
-    }
-  }
+  console.log(`✅ Created ${bodies.length} collision wedges`);
 
   return bodies;
 }
@@ -280,21 +309,6 @@ function createSegmentWedge(
     quaternion: orientation,
     type: CANNON.Body.STATIC,
   });
-
-  // Debug first segment in detail
-  if (sampleA.distance < 1.0) {
-    console.log(`🔍 DETAILED DEBUG - First segment:`);
-    console.log(`   Sample A: (${sampleA.position.x.toFixed(2)}, ${sampleA.position.y.toFixed(2)}, ${sampleA.position.z.toFixed(2)})`);
-    console.log(`   Sample B: (${sampleB.position.x.toFixed(2)}, ${sampleB.position.y.toFixed(2)}, ${sampleB.position.z.toFixed(2)})`);
-    console.log(`   Midpoint: (${midpoint.x.toFixed(2)}, ${midpoint.y.toFixed(2)}, ${midpoint.z.toFixed(2)})`);
-    console.log(`   Forward: (${forward.x.toFixed(3)}, ${forward.y.toFixed(3)}, ${forward.z.toFixed(3)})`);
-    console.log(`   Right: (${right.x.toFixed(3)}, ${right.y.toFixed(3)}, ${right.z.toFixed(3)})`);
-    console.log(`   Up: (${up.x.toFixed(3)}, ${up.y.toFixed(3)}, ${up.z.toFixed(3)})`);
-    console.log(`   Center offset: (${(up.x * thickness * 0.5).toFixed(3)}, ${(up.y * thickness * 0.5).toFixed(3)}, ${(up.z * thickness * 0.5).toFixed(3)})`);
-    console.log(`   Final center: (${center.x.toFixed(2)}, ${center.y.toFixed(2)}, ${center.z.toFixed(2)})`);
-    console.log(`   Quaternion: (${orientation.x.toFixed(3)}, ${orientation.y.toFixed(3)}, ${orientation.z.toFixed(3)}, ${orientation.w.toFixed(3)})`);
-    console.log(`   Box half-extents: (${halfExtents.x}, ${halfExtents.y}, ${halfExtents.z})`);
-  }
 
   return body;
 }
