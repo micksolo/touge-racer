@@ -106,6 +106,9 @@ export function calculateVehicleTelemetry(
 
   // Calculate per-wheel telemetry
   vehicle.wheelInfos.forEach((wheelInfo, i) => {
+    // CRITICAL: Read isInContact BEFORE updateWheelTransform(), which resets it to false!
+    const isInContact = wheelInfo.isInContact;
+
     // Update wheel transform to get world position/rotation
     vehicle.updateWheelTransform(i);
     const wheelTransform = wheelInfo.worldTransform;
@@ -175,7 +178,7 @@ export function calculateVehicleTelemetry(
 
     wheels.push({
       index: i,
-      isInContact: wheelInfo.isInContact,
+      isInContact: isInContact,
       suspensionLength: wheelInfo.suspensionLength,
       suspensionCompression: clampedCompression,
       slipAngle,

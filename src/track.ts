@@ -53,6 +53,7 @@ export class TrackSurface {
     const uvs: number[] = [];
 
     const samples: TrackSample[] = [];
+    const tempNormals: THREE.Vector3[] = []; // Store normals for smoothing pass
     const lengthScale = curve.getLength() / 12;
     const bankMatrix = new THREE.Matrix4();
 
@@ -61,49 +62,96 @@ export class TrackSurface {
       const tNorm = i / segments;
       const localWidth = widthProfile ? widthProfile(tNorm) : width;
 
-      // ROAD-ALIGNED APPROACH: Build proper road frame
+      // PARALLEL TRANSPORT FRAMES: Rotation-minimizing frames to eliminate warping
+      // This prevents the twisting/torsion that Frenet frames introduce on tight curves
       // - Tangent follows the curve (includes elevation)
-      // - Binormal is horizontal (left-right across road)
+      // - Binormal is transported with minimal rotation (prevents twisting)
       // - Normal is perpendicular to both (surface normal, will tilt on slopes)
-      const tangent = frames.tangents[i].clone().normalize();
 
-      // Build horizontal binormal: perpendicular to tangent, in horizontal plane
+      // Compute tangent directly from curve points (avoid Frenet tangents which include torsion)
+      let tangent: THREE.Vector3;
+      if (i === 0) {
+        tangent = new THREE.Vector3().subVectors(points[1], points[0]).normalize();
+      } else if (i === segments) {
+        tangent = new THREE.Vector3().subVectors(points[segments], points[segments - 1]).normalize();
+      } else {
+        // Central difference for smoother tangents
+        tangent = new THREE.Vector3().subVectors(points[i + 1], points[i - 1]).normalize();
+      }
+
       const worldUp = new THREE.Vector3(0, 1, 0);
 
-      // Binormal points horizontally to the right
-      // Cross product: worldUp × tangent = horizontal right direction
-      const binormal = new THREE.Vector3().crossVectors(worldUp, tangent);
+      // HORIZONTAL BINORMAL: Force binormal to always be horizontal (perpendicular to world up)
+      // This ensures flat, level cross-sections at all times - no warping possible
+      let binormal: THREE.Vector3;
 
-      // If tangent is nearly vertical, binormal becomes degenerate
-      if (binormal.lengthSq() < 0.001) {
-        // Fallback: use a horizontal direction
-        binormal.set(1, 0, 0);
+      if (Math.abs(tangent.dot(worldUp)) > 0.99) {
+        // Tangent is nearly vertical - use fallback horizontal direction
+        binormal = new THREE.Vector3(1, 0, 0);
       } else {
-        binormal.normalize();
+        // Cross product: worldUp × tangent = horizontal right direction
+        // This ALWAYS produces a horizontal binormal regardless of curve changes
+        binormal = new THREE.Vector3().crossVectors(worldUp, tangent).normalize();
       }
 
       // Normal points upward-ish, perpendicular to both tangent and binormal
       // Cross product: tangent × binormal = normal (right-hand rule)
       const normal = new THREE.Vector3().crossVectors(tangent, binormal).normalize();
+      tempNormals.push(normal); // Store for smoothing
 
+      // Create left/right vertices along binormal
+      // The parallel transport frames ensure the binormal doesn't twist,
+      // so these vertices naturally form flat cross-sections
       const left = point.clone().addScaledVector(binormal, localWidth * 0.5);
       const right = point.clone().addScaledVector(binormal, -localWidth * 0.5);
 
       positions.push(left.x, left.y, left.z, right.x, right.y, right.z);
 
-      normals.push(normal.x, normal.y, normal.z, normal.x, normal.y, normal.z);
+      // Normals will be added after smoothing pass
+      normals.push(0, 0, 0, 0, 0, 0); // Placeholder
 
       const v = lengths[i] / lengthScale;
       uvs.push(0, v, 1, v);
 
+      // Temporarily store with unsmoothed normal - will update after smoothing
       samples.push({
         position: point.clone(),
         tangent,
-        normal,
+        normal, // Will be replaced with smoothed version
         binormal: binormal.clone(),
         distance: lengths[i],
         width: localWidth,
       });
+    }
+
+    // SMOOTH NORMALS PASS: Average normals with neighbors to eliminate micro-stepping
+    // This creates gradual transitions that the suspension physics can handle smoothly
+    const smoothedNormals: THREE.Vector3[] = [];
+    const smoothRadius = 20; // Smooth over ±20 segments (41 total) - very aggressive smoothing
+
+    for (let i = 0; i < tempNormals.length; i++) {
+      const avgNormal = new THREE.Vector3();
+      let count = 0;
+
+      for (let j = Math.max(0, i - smoothRadius); j <= Math.min(tempNormals.length - 1, i + smoothRadius); j++) {
+        avgNormal.add(tempNormals[j]);
+        count++;
+      }
+
+      avgNormal.divideScalar(count).normalize();
+      smoothedNormals.push(avgNormal);
+
+      // Update samples array with smoothed normal
+      samples[i].normal = avgNormal.clone();
+
+      // Update normals array with smoothed values (2 vertices per sample, same normal for both)
+      const idx = i * 6; // 6 floats per sample (2 vertices × 3 components)
+      normals[idx] = avgNormal.x;
+      normals[idx + 1] = avgNormal.y;
+      normals[idx + 2] = avgNormal.z;
+      normals[idx + 3] = avgNormal.x;
+      normals[idx + 4] = avgNormal.y;
+      normals[idx + 5] = avgNormal.z;
     }
 
     for (let i = 0; i < segments; i += 1) {

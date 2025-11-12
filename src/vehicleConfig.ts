@@ -84,8 +84,8 @@ export const PROTO_CONFIG: VehicleConfig = {
   suspension: {
     stiffness: 100,            // Stiffer to support 2200kg
     restLength: 0.3,           // Short suspension for low, stable ride
-    dampingCompression: 25.0,  // Higher compression damping to absorb bumps
-    dampingRelaxation: 30.0,   // Very high rebound damping to prevent bouncing
+    dampingCompression: 25.0,  // Original - moderate damping
+    dampingRelaxation: 30.0,   // Original - moderate-high damping
     maxForce: 120000,          // Strong suspension to support 2200kg
     maxTravel: 0.15,           // Even more limited travel
   },

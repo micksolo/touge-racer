@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createMountainTrack } from './track';
 import { createTrackCollisionBodies, createRaycastRibbon, createTrackMaterial, createTrackWalls, visualizeCollisionBodies } from './trackCollision';
+import { castRaySmooth, useSmoothRaycasts } from './smoothRaycast';
 import { calculateVehicleTelemetry, formatTelemetryHUD, type VehicleTelemetry } from './telemetry';
 import { getVehicleConfig, describeVehicle, type VehicleConfigKey } from './vehicleConfig';
 
@@ -9,6 +10,9 @@ import { getVehicleConfig, describeVehicle, type VehicleConfigKey } from './vehi
 // CANNON-ES VEHICLE TEST - MOUNTAIN TRACK
 // RaycastVehicle on touge track with TWO-LAYER collision system
 // ============================================================================
+
+// Debug counter for limiting console spam
+let vehicleDebugFrames = 0;
 
 // COLLISION GROUPS for two-layer system
 const CHASSIS_GROUP = 1;      // Chassis body
@@ -62,8 +66,8 @@ export function runCannonTest() {
   hudDiv.style.borderRadius = '5px';
   document.body.appendChild(hudDiv);
 
-  // Lighting
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  // Lighting - VERY BRIGHT for debugging visibility
+  const ambientLight = new THREE.AmbientLight(0xffffff, 2.0); // Increased from 0.6 to 2.0
   scene.add(ambientLight);
   const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
   dirLight.position.set(10, 20, 10);
@@ -368,6 +372,8 @@ export function runCannonTest() {
     shape: chassisShape,
     angularDamping: vehicleConfig.dynamics.angularDamping,
     linearDamping: vehicleConfig.dynamics.linearDamping,
+    collisionFilterGroup: CHASSIS_GROUP,
+    collisionFilterMask: ~MAIN_GROUND_GROUP, // Don't collide with track boxes (smooth raycasting handles wheels)
   });
 
   // Center of mass from config
@@ -378,11 +384,13 @@ export function runCannonTest() {
   const startPos = startSample.position;
   const startTangent = startSample.tangent;
 
-  // Spawn chassis higher above the ground and let it drop
-  // This prevents clipping into collision boxes at spawn
+  // Spawn chassis at perfect rest height for smooth raycasting
+  // Height = wheel attachment point + suspension rest length + wheel radius (no extra margin - suspension will settle naturally)
   const wheelConnectionY = Math.abs(vehicleConfig.wheels.positions[0].y);
-  const spawnHeight = vehicleConfig.wheels.radius + vehicleConfig.suspension.restLength + wheelConnectionY + 0.5; // Small drop for gentle landing
+  const spawnHeight = vehicleConfig.wheels.radius + vehicleConfig.suspension.restLength + wheelConnectionY;
   chassisBody.position.set(startPos.x, startPos.y + spawnHeight, startPos.z);
+
+  console.log(`📐 Spawn calc: wheelAttach=${wheelConnectionY.toFixed(2)}m + suspRest=${vehicleConfig.suspension.restLength.toFixed(2)}m + wheelRadius=${vehicleConfig.wheels.radius.toFixed(2)}m = ${spawnHeight.toFixed(2)}m above track`);
 
   // Orient car along track tangent
   const startYaw = Math.atan2(startTangent.x, startTangent.z);
@@ -390,7 +398,20 @@ export function runCannonTest() {
 
   world.addBody(chassisBody);
 
+  // CRITICAL: Initialize car mesh position/rotation to match physics spawn
+  // This prevents lerp/slerp from interpolating from origin (0,0,0) on first frame
+  carMesh.position.copy(chassisBody.position as any);
+  carMesh.quaternion.copy(chassisBody.quaternion as any);
+
   console.log(`🚗 Chassis spawned at Y=${(startPos.y + spawnHeight).toFixed(1)} (gentle drop to track at Y=${startPos.y.toFixed(1)})`);
+  console.log(`🎨 Car mesh initial position: (${carMesh.position.x.toFixed(1)}, ${carMesh.position.y.toFixed(1)}, ${carMesh.position.z.toFixed(1)})`);
+
+  // Initialize camera position behind car
+  const initialCameraOffset = new THREE.Vector3(0, 5, -15);
+  const initialCameraPos = new THREE.Vector3().copy(carMesh.position).add(initialCameraOffset);
+  camera.position.copy(initialCameraPos);
+  camera.lookAt(carMesh.position);
+  console.log(`📷 Camera initialized at: (${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)})`);
 
   // Create RaycastVehicle
   const vehicle = new CANNON.RaycastVehicle({
@@ -427,7 +448,22 @@ export function runCannonTest() {
 
   vehicle.addToWorld(world);
 
+  // Override castRay with smooth track raycasting
+  // This clones CANNON's logic but uses mesh intersection instead of physics bodies
+  const originalCastRay = vehicle.castRay.bind(vehicle);
+  vehicle.castRay = (wheelInfo: any) => {
+    if (useSmoothRaycasts) {
+      const depth = castRaySmooth(vehicle, wheelInfo, track);
+      if (depth >= 0) {
+        return depth; // Smooth raycast succeeded
+      }
+    }
+    // Fallback to CANNON's box collision
+    return originalCastRay(wheelInfo);
+  };
+
   console.log(`✅ Vehicle ready: ${vehicleConfig.name} (${vehicleConfig.chassis.mass}kg, ${vehicle.wheelInfos.length} wheels)`);
+  console.log(`✨ Smooth track raycasting: ${useSmoothRaycasts ? 'ENABLED' : 'DISABLED'}`);
 
   // ============================================================================
   // ARCADE GUARDRAIL PHYSICS - Distance-Based Wall Assist
@@ -763,6 +799,12 @@ export function runCannonTest() {
     if (input.forward) engineForce = -maxForce; // Negative for forward
     if (input.backward) engineForce = maxForce;  // Positive for backward
 
+    // Debug: Log input state once per second
+    if (Math.floor(performance.now() / 1000) !== Math.floor((performance.now() - 16) / 1000)) {
+      const wheelsInContact = vehicle.wheelInfos.filter((w: any) => w.isInContact).length;
+      console.log(`🎮 Input: fwd=${input.forward}, back=${input.backward}, left=${input.left}, right=${input.right} | Force=${engineForce.toFixed(0)} | Wheels=${wheelsInContact}/4 | Steer=${steerValue.toFixed(2)}`);
+    }
+
     vehicle.applyEngineForce(engineForce, 2); // Rear-left
     vehicle.applyEngineForce(engineForce, 3); // Rear-right
 
@@ -781,13 +823,41 @@ export function runCannonTest() {
       vehicle.setBrake(0, 3);
     }
 
+    // Expose to global for manual inspection
+    (window as any).debugVehicle = vehicle;
+
     // Update physics
     vehicle.updateVehicle(1 / 60);
+
     world.step(1 / 60, deltaTime, 3);
 
-    // Update visuals from physics
-    carMesh.position.copy(chassisBody.position as any);
-    carMesh.quaternion.copy(chassisBody.quaternion as any);
+    // CRITICAL: Calculate telemetry BEFORE updating wheel visuals!
+    // updateWheelTransform() resets isInContact to false, so we must read it first
+    const telemetry = calculateVehicleTelemetry(vehicle, chassisBody);
+
+    // DEBUG: Track wheel contact loss
+    const contactCount = telemetry.wheels.filter(w => w.isInContact).length;
+    if (contactCount < 4) {
+      const lostWheels = telemetry.wheels
+        .map((w, i) => w.isInContact ? null : i)
+        .filter(i => i !== null);
+      const position = chassisBody.position;
+      const velocity = chassisBody.velocity;
+      console.warn(
+        `⚠️ WHEEL CONTACT LOSS: ${contactCount}/4 wheels on ground | ` +
+        `Lost wheels: ${lostWheels.join(', ')} | ` +
+        `Position: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)}) | ` +
+        `Speed: ${velocity.length().toFixed(1)} m/s | ` +
+        `Suspension lengths: [${telemetry.wheels.map(w => w.suspensionLength.toFixed(3)).join(', ')}]`
+      );
+    }
+
+    // Update visuals from physics with smoothing to reduce jitter
+    // Interpolate position for smoother visual (lerp factor 0.8 = very responsive, minimal lag)
+    const targetPosition = new THREE.Vector3().copy(chassisBody.position as any);
+    carMesh.position.lerp(targetPosition, 0.8);
+    const targetQuaternion = new THREE.Quaternion().copy(chassisBody.quaternion as any);
+    carMesh.quaternion.slerp(targetQuaternion, 0.8);
 
     // Update wheel visuals
     vehicle.wheelInfos.forEach((wheel, i) => {
@@ -852,9 +922,6 @@ export function runCannonTest() {
         .add(carMesh.position);
       camera.lookAt(lookAtPoint);
     }
-
-    // Calculate telemetry
-    const telemetry = calculateVehicleTelemetry(vehicle, chassisBody);
 
     // Track first landing
     const wheelsOnGround = telemetry.wheels.filter(w => w.isInContact).length;
@@ -953,6 +1020,12 @@ export function runCannonTest() {
 
     // Render
     renderer.render(scene, camera);
+
+    // Debug: Log render info once
+    if (frameCount === 10) {
+      console.log(`🎬 Rendering: camera at (${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}), car at (${carMesh.position.x.toFixed(1)}, ${carMesh.position.y.toFixed(1)}, ${carMesh.position.z.toFixed(1)})`);
+      console.log(`🎬 Scene has ${scene.children.length} children, camera looking at car: ${camera.matrix.elements[14].toFixed(1)}`);
+    }
   }
 
   animate();

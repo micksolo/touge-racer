@@ -308,6 +308,8 @@ function createSegmentWedge(
     position: new CANNON.Vec3(center.x, center.y, center.z),
     quaternion: orientation,
     type: CANNON.Body.STATIC,
+    collisionFilterGroup: 2, // MAIN_GROUND_GROUP
+    collisionFilterMask: ~1,  // Don't collide with CHASSIS_GROUP
   });
 
   return body;
